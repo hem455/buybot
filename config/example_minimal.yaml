@@ -1,0 +1,42 @@
+# GMOコイン自動売買システム - 最小限の設定例
+# これをコピーして config.yaml として使用してください
+
+# === 必須設定（これだけあれば動く） ===
+
+# 取引設定
+trading:
+  symbol: "BTC_JPY"  # 取引通貨ペア
+
+# 戦略設定
+strategies:
+  default: "simple_ma_cross"  # デフォルト戦略
+  available:
+    simple_ma_cross:
+      name: "単純移動平均クロス"
+      parameters:
+        short_period: 7   # 短期移動平均
+        long_period: 25   # 長期移動平均
+
+# リスク管理（重要！）
+risk_management:
+  position_sizing:
+    risk_per_trade: 0.02  # 1取引あたり総資産の2%
+  max_open_positions: 1   # 最大ポジション数
+  max_drawdown_percentage: 0.20  # 最大ドローダウン20%
+
+# バックテスト設定
+backtest:
+  initial_capital: 1000000  # 初期資金100万円
+  commission:
+    taker_fee: 0.0009  # 手数料0.09%
+
+# === 以下はオプション（デフォルト値で動作） ===
+
+# データ取得設定
+data_fetcher:
+  ohlcv:
+    default_interval: "1hour"  # デフォルトの時間足
+
+# ログ設定
+logging:
+  level: "INFO"  # INFO, DEBUG, WARNING, ERROR

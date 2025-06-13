@@ -1,0 +1,298 @@
+# GMOコイン自動売買システム設定ファイル
+# 最終更新日: 2025年5月28日
+
+system:
+  name: "GMOコイン自動売買システム"
+  version: "1.0.0"
+  timezone: "Asia/Tokyo"
+
+# 取引所設定
+exchange:
+  name: "GMOCoin"
+  rest_endpoint: "https://api.coin.z.com/public"
+  private_endpoint: "https://api.coin.z.com/private"
+  websocket_endpoint: "wss://api.coin.z.com/ws/public/v1"
+  private_ws_endpoint: "wss://api.coin.z.com/ws/private/v1"
+
+# 取引ペア設定
+trading:
+  symbol: "BTC_JPY"
+  leverage: 1  # 現物取引
+  min_order_size: 0.0001
+  max_order_size: 10
+  tick_size: 1  # 価格の最小単位
+
+# データ取得設定
+data_fetcher:
+  # OHLCV設定
+  ohlcv:
+    intervals: ["1min", "5min", "15min", "1hour", "4hour", "1day"]
+    default_interval: "1hour"
+    max_records: 1000
+    data_dir: "./data/ohlcv"
+  
+  # WebSocket設定
+  websocket:
+    channels:
+      - "ticker"
+      - "trades"
+      - "orderbooks"
+    reconnect_interval: 5  # 秒
+    max_reconnect_attempts: 10
+    heartbeat_interval: 30  # 秒
+  
+  # APIレート制限
+  rate_limit:
+    public_api:
+      requests_per_second: 10
+      requests_per_minute: 600
+    private_api:
+      requests_per_second: 10
+      requests_per_minute: 300
+
+# テクニカル指標設定
+indicators:
+  # 移動平均
+  sma:
+    periods: [7, 25, 99]
+  ema:
+    periods: [12, 26]
+  
+  # MACD
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+  
+  # RSI
+  rsi:
+    period: 14
+    overbought: 70
+    oversold: 30
+  
+  # ボリンジャーバンド
+  bollinger_bands:
+    period: 20
+    num_std: 2
+  
+  # ATR
+  atr:
+    period: 14
+
+# 戦略設定
+strategies:
+  # デフォルト戦略
+  default: "simple_ma_cross"
+  
+  # 利用可能な戦略
+  available:
+    simple_ma_cross:
+      name: "単純移動平均クロス"
+      description: "短期MAと長期MAのクロスでエントリー"
+      parameters:
+        short_period: 7
+        long_period: 25
+        confirmation_bars: 1
+    
+    macd_rsi:
+      name: "MACD + RSI戦略"
+      description: "MACDシグナルとRSIを組み合わせた戦略"
+      parameters:
+        rsi_oversold: 30
+        rsi_overbought: 70
+        macd_threshold: 0
+    
+    bollinger_breakout:
+      name: "ボリンジャーバンドブレイクアウト"
+      description: "ボリンジャーバンドのブレイクアウトを狙う戦略"
+      parameters:
+        bb_period: 20
+        bb_std: 2
+        volume_multiplier: 1.5
+    
+    grid_trading:
+      name: "グリッドトレーディング"
+      description: "価格のレンジ内で複数の注文を配置して利益を狙う"
+      parameters:
+        grid_count: 10
+        grid_spacing_pct: 1.0
+        position_size_per_grid: 0.001
+        price_range_pct: 10.0
+        rebalance_threshold: 5.0
+    
+    multi_timeframe:
+      name: "マルチタイムフレーム"
+      description: "複数の時間足を組み合わせて精度を高める"
+      parameters:
+        tf_primary: 60
+        tf_secondary: 240
+        tf_tertiary: 1440
+        ma_fast: 20
+        ma_slow: 50
+        rsi_oversold: 30
+        rsi_overbought: 70
+    
+    ml_based:
+      name: "機械学習ベース"
+      description: "ランダムフォレストを使用した予測モデル"
+      parameters:
+        lookback_period: 20
+        prediction_threshold: 0.6
+        min_data_points: 100
+        retrain_interval: 1000
+        feature_set: 'basic'
+
+# リスク管理設定
+risk_management:
+  # ポジションサイジング
+  position_sizing:
+    method: "fixed_percentage"  # fixed_percentage, kelly, fixed_amount
+    risk_per_trade: 0.02  # 総資産の2%
+    max_position_size: 0.1  # 最大ポジションサイズ (BTC)
+  
+  # ストップロス・テイクプロフィット
+  stop_loss:
+    enabled: true
+    method: "atr"  # percentage, atr, fixed_amount
+    atr_multiplier: 2.0
+    percentage: 0.02  # 2%
+    
+  take_profit:
+    enabled: true
+    method: "risk_reward"  # percentage, risk_reward, fixed_amount
+    risk_reward_ratio: 2.0
+    percentage: 0.04  # 4%
+  
+  # その他のリスク管理
+  max_open_positions: 3
+  max_daily_trades: 10
+  max_drawdown_percentage: 0.20  # 20%
+  margin_call_percentage: 0.05  # 5%
+
+# バックテスト設定
+backtest:
+  # 手数料設定
+  commission:
+    type: "percentage"  # percentage, fixed
+    maker_fee: 0.0005  # 0.05%
+    taker_fee: 0.0009  # 0.09%
+  
+  # スリッページ設定
+  slippage:
+    enabled: true
+    type: "percentage"  # percentage, fixed
+    percentage: 0.0001  # 0.01%
+  
+  # その他の設定
+  initial_capital: 1000000  # 100万円
+  data_source: "local"  # local, api
+  
+  # パフォーマンス指標
+  metrics:
+    - "total_return"
+    - "sharpe_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "profit_factor"
+    - "average_win"
+    - "average_loss"
+    - "total_trades"
+
+# ロギング設定
+logging:
+  # ログレベル (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  level: "INFO"
+  
+  # ログフォーマット
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
+  
+  # ログファイル設定
+  file:
+    enabled: true
+    path: "./logs"
+    rotation: "10 MB"  # ファイルサイズでローテーション
+    retention: "30 days"  # 保持期間
+    compression: "zip"
+  
+  # コンソール出力
+  console:
+    enabled: true
+    colorize: true
+  
+  # 取引ログ (法的・税務用)
+  trade_log:
+    enabled: true
+    path: "./logs/trades"
+    format: "csv"  # csv, json, parquet
+    fields:
+      - "timestamp"
+      - "pair"
+      - "side"
+      - "quantity"
+      - "price"
+      - "fee"
+      - "realized_pnl"
+      - "order_id"
+      - "execution_id"
+
+# 通知設定
+notifications:
+  # Slack通知
+  slack:
+    enabled: false
+    webhook_url: ""  # .envファイルで設定
+    channels:
+      trades: "#trading-alerts"
+      errors: "#trading-errors"
+      daily_report: "#trading-reports"
+  
+  # Email通知
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    from_address: ""  # .envファイルで設定
+    to_addresses: []  # .envファイルで設定
+    
+  # 通知トリガー
+  triggers:
+    - "order_filled"
+    - "stop_loss_hit"
+    - "take_profit_hit"
+    - "max_drawdown_exceeded"
+    - "system_error"
+    - "daily_report"
+
+# モニタリング設定 (オプション)
+monitoring:
+  prometheus:
+    enabled: false
+    port: 9090
+    metrics:
+      - "total_trades"
+      - "win_rate" 
+      - "current_pnl"
+      - "api_latency"
+      - "websocket_status"
+
+# UI設定 (Streamlit)
+ui:
+  # サーバー設定
+  server:
+    port: 8501
+    address: "0.0.0.0"
+  
+  # 更新間隔
+  refresh_interval: 5  # 秒
+  
+  # テーマ
+  theme: "dark"  # light, dark
+  
+  # 表示設定
+  display:
+    max_trades_shown: 100
+    chart_height: 600
+    decimal_places:
+      price: 0
+      quantity: 4
+      percentage: 2

@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: gmo-trading-bot
+    environment:
+      - MODE=bot
+      - TZ=Asia/Tokyo
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    command: python main.py --mode bot
+
+  trading-ui:
+    build: .
+    container_name: gmo-trading-ui
+    environment:
+      - MODE=ui
+      - TZ=Asia/Tokyo
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    command: python main.py --mode ui
+
+  # データベース（オプション）
+  # postgres:
+  #   image: postgres:15
+  #   container_name: gmo-trading-db
+  #   environment:
+  #     POSTGRES_USER: trading
+  #     POSTGRES_PASSWORD: trading_password
+  #     POSTGRES_DB: trading_db
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped
+
+  # Prometheus（モニタリング用、オプション）
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: gmo-trading-prometheus
+  #   volumes:
+  #     - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   restart: unless-stopped
+
+  # Grafana（モニタリング用、オプション）
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: gmo-trading-grafana
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #   ports:
+  #     - "3000:3000"
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
