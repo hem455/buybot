@@ -1,3 +1,14 @@
+[server]
+# Server configuration
+port = 8502
+headless = true
+enableCORS = true
+enableXsrfProtection = true
+
+[browser]
+# Automatically open browser when starting
+gatherUsageStats = false
+
 [theme]
 # Primary color for interactive elements
 primaryColor = "#ff6b35"

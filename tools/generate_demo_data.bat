@@ -4,17 +4,17 @@ echo Generating Sample Chart Data
 echo ==========================================
 echo.
 
-REM 仮想環境をアクティブ化
+REM Activate virtual environment
 call venv\Scripts\activate
 
 echo Creating realistic demo data for charts...
 echo.
 
-REM サンプルデータ生成
+REM Generate sample data
 python scripts\generate_sample_data.py
 
 echo.
-echo ✅ Sample data generated successfully!
+echo Sample data generated successfully!
 echo.
 echo You can now:
 echo 1. Start the Modern UI: start_modern_ui.bat

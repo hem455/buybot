@@ -16,6 +16,7 @@
 すべての戦略は `BaseStrategy` クラスを継承して実装します。
 
 ```python
+import pandas as pd
 from backend.strategy import BaseStrategy, Signal
 
 class MyStrategy(BaseStrategy):
@@ -48,20 +49,32 @@ class MyNewStrategy(BaseStrategy):
         super().__init__(strategy_id, {**default_params, **(params or {})})
     
     def generate_signal(self, df, current_position, account_info):
+        # 必要な指標の存在確認
+        if 'rsi' not in df.columns:
+            raise ValueError(f"Required indicator 'rsi' is missing from dataframe. Available columns: {list(df.columns)}")
+        
+        # データフレームが空でないかチェック
+        if df.empty:
+            raise ValueError("Dataframe is empty")
+        
         # 最新データ
         latest = df.iloc[-1]
+        
+        # RSI値の有効性チェック
+        if pd.isna(latest['rsi']):
+            return Signal.HOLD, {'reason': 'RSI value is NaN, waiting for valid data'}
         
         # エントリー条件
         if not current_position:
             if latest['rsi'] < self.params['rsi_threshold']:
-                return Signal.BUY, {'reason': 'RSI oversold'}
+                return Signal.BUY, {'reason': 'RSI oversold', 'rsi': latest['rsi']}
         
         # エグジット条件
         elif current_position['side'] == 'LONG':
             if latest['rsi'] > 70:
-                return Signal.CLOSE_LONG, {'reason': 'RSI overbought'}
+                return Signal.CLOSE_LONG, {'reason': 'RSI overbought', 'rsi': latest['rsi']}
         
-        return Signal.HOLD, {}
+        return Signal.HOLD, {'rsi': latest['rsi']}
 ```
 
 ### 3. 戦略を登録
@@ -130,7 +143,22 @@ def calculate_custom_indicator(self, df: pd.DataFrame) -> pd.DataFrame:
 ```python
 class BollingerRSIStrategy(BaseStrategy):
     def generate_signal(self, df, current_position, account_info):
+        # 必要な指標の存在確認
+        required_columns = ['close', 'bb_upper', 'bb_lower', 'bb_middle', 'rsi']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Required indicators are missing: {missing_columns}. Available: {list(df.columns)}")
+        
+        # データフレームが空でないかチェック
+        if df.empty:
+            raise ValueError("Dataframe is empty")
+        
         latest = df.iloc[-1]
+        
+        # 指標値の有効性チェック
+        if any(pd.isna(latest[col]) for col in required_columns):
+            invalid_cols = [col for col in required_columns if pd.isna(latest[col])]
+            return Signal.HOLD, {'reason': f'Invalid indicator values: {invalid_cols}'}
         
         # ポジションなし
         if not current_position:
@@ -174,17 +202,34 @@ class MultiTimeframeStrategy(BaseStrategy):
         self.higher_tf_data = {}  # 上位足データを保存
     
     def generate_signal(self, df, current_position, account_info):
+        # 必要な列の存在確認
+        required_columns = ['open', 'high', 'low', 'close', 'volume', 'rsi']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Required columns are missing: {missing_columns}. Available: {list(df.columns)}")
+        
+        # データフレームが空でないかチェック
+        if df.empty:
+            raise ValueError("Dataframe is empty")
+        
         # 1時間足での判断（メイン）
         latest_1h = df.iloc[-1]
         
+        # RSI値の有効性チェック
+        if pd.isna(latest_1h['rsi']):
+            return Signal.HOLD, {'reason': 'RSI value is NaN'}
+        
         # 4時間足のトレンド確認（仮想的に計算）
-        df_4h = df.resample('4H').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        })
+        try:
+            df_4h = df.resample('4H').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            })
+        except Exception as e:
+            return Signal.HOLD, {'reason': f'Failed to resample data: {str(e)}'}
         
         if len(df_4h) < 50:
             return Signal.HOLD, {'reason': 'データ不足'}
@@ -192,6 +237,11 @@ class MultiTimeframeStrategy(BaseStrategy):
         # 4時間足のトレンド
         sma_20_4h = df_4h['close'].rolling(20).mean().iloc[-1]
         sma_50_4h = df_4h['close'].rolling(50).mean().iloc[-1]
+        
+        # SMA値の有効性チェック
+        if pd.isna(sma_20_4h) or pd.isna(sma_50_4h):
+            return Signal.HOLD, {'reason': '4H SMA values are NaN'}
+        
         trend_4h = 'UP' if sma_20_4h > sma_50_4h else 'DOWN'
         
         # エントリー条件
@@ -204,7 +254,7 @@ class MultiTimeframeStrategy(BaseStrategy):
                     'rsi_1h': latest_1h['rsi']
                 }
         
-        return Signal.HOLD, {}
+        return Signal.HOLD, {'trend_4h': trend_4h, 'rsi_1h': latest_1h['rsi']}
 ```
 
 ## 戦略のテスト方法
@@ -250,7 +300,40 @@ trading:
 
 ## ベストプラクティス
 
-### 1. リスク管理を最優先
+### 1. エラーハンドリング（重要）
+
+戦略でのエラーハンドリングは必須です：
+
+```python
+def generate_signal(self, df, current_position, account_info):
+    # 1. 必要な指標の存在確認
+    required_columns = ['close', 'rsi', 'macd']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Required indicators missing: {missing_columns}")
+    
+    # 2. データフレームの検証
+    if df.empty:
+        raise ValueError("Empty dataframe provided")
+    
+    # 3. NaN値のチェック
+    latest = df.iloc[-1]
+    if pd.isna(latest['rsi']):
+        return Signal.HOLD, {'reason': 'RSI is NaN, waiting for valid data'}
+    
+    # 4. 計算例外の処理
+    try:
+        signal_strength = latest['macd'] / latest['rsi']
+    except ZeroDivisionError:
+        return Signal.HOLD, {'reason': 'Division by zero in calculation'}
+    except Exception as e:
+        self.logger.error(f"Calculation error: {e}")
+        return Signal.HOLD, {'reason': f'Calculation error: {str(e)}'}
+    
+    return signal, details
+```
+
+### 2. リスク管理を最優先
 
 ```python
 def generate_signal(self, df, current_position, account_info):

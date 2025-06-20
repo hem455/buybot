@@ -47,7 +47,7 @@ GMO_API_SECRET=your_api_secret_here
 docker-compose up -d
 
 # UIにアクセス
-# http://localhost:8501
+# http://localhost:8502
 ```
 
 ### 4. ローカル環境で実行する場合
@@ -84,7 +84,7 @@ start_ui.bat
 start_modern_ui.bat
 ```
 
-ブラウザで http://localhost:8501 にアクセス
+ブラウザで http://localhost:8502 にアクセス（自動で開きます）
 
 ## 設定
 

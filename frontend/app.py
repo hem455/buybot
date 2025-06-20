@@ -21,7 +21,6 @@ from backend.config_manager import get_config_manager
 from backend.logger import get_logger
 from backend.strategy import get_strategy_manager
 from backend.backtester import Backtester, BenchmarkComparator
-from backend.backtester.validator import BacktestValidator
 from backend.data_fetcher import GMOCoinRESTFetcher
 from backend.risk_manager import RiskManager
 from backend.order_executor import OrderExecutor
@@ -34,8 +33,20 @@ except ImportError:
     def display_benchmark_comparison(result):
         st.info("ベンチマーク比較機能は準備中です")
     
-    def display_backtest_warnings(result):
-        st.info("警告表示機能は準備中です")
+    def display_backtest_warnings(warnings):
+        for warning in warnings:
+            st.warning(warning)
+
+# BacktestValidatorのインポートを試行
+try:
+    from backend.backtester.validator import BacktestValidator
+except ImportError:
+    # BacktestValidatorが見つからない場合のダミー関数
+    class BacktestValidator:
+        def __init__(self, *args, **kwargs):
+            pass
+        def validate(self):
+            return ["警告: バックテスト検証機能が無効です。"]
 
 # ページ設定
 st.set_page_config(
@@ -50,6 +61,8 @@ if 'bot_running' not in st.session_state:
     st.session_state.bot_running = False
 if 'backtest_result' not in st.session_state:
     st.session_state.backtest_result = None
+if 'backtest_warnings' not in st.session_state:
+    st.session_state.backtest_warnings = []
 if 'current_tab' not in st.session_state:
     st.session_state.current_tab = "バックテスト"
 
@@ -165,6 +178,9 @@ def backtest_page():
             
             if result:
                 st.session_state.backtest_result = result
+                # バックテスト結果を検証し、警告を保存
+                validator = BacktestValidator(result)
+                st.session_state.backtest_warnings = validator.validate()
                 st.success("バックテストが完了しました！")
             else:
                 st.error("バックテストの実行に失敗しました")
@@ -215,8 +231,9 @@ def display_backtest_results(result: Dict[str, Any]):
     display_benchmark_comparison(result)
     
     # 警告表示
-    st.subheader("🚨 バックテスト結果の警告")
-    display_backtest_warnings(result)
+    if st.session_state.backtest_warnings:
+        st.subheader("🚨 バックテスト結果の警告")
+        display_backtest_warnings(st.session_state.backtest_warnings)
     
     # メトリクス表示
     col1, col2, col3, col4 = st.columns(4)

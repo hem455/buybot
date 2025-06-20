@@ -142,7 +142,7 @@ def save_sample_data():
             df = generate_realistic_ohlcv(symbol, days=90, interval=interval)
             
             # 保存
-            storage.save_ohlcv(df, symbol, interval)
+            storage.save_ohlcv(symbol, interval, df)
             print(f"Saved {len(df)} records for {symbol} {interval}")
     
     print("\nSample data generation completed!")

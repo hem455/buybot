@@ -272,13 +272,32 @@ Backtester
 - **ui**: UI設定
 
 ### 2. `.env`
-機密情報を保存:
+機密情報を保存（環境別に設定）:
+
+**開発環境用 (`.env.development`)**:
 ```
-GMO_API_KEY=your_api_key
-GMO_API_SECRET=your_api_secret
+GMO_API_KEY=your_test_api_key
+GMO_API_SECRET=your_test_api_secret
 ENV=development
 DEBUG=True
+LOG_LEVEL=DEBUG
+PAPER_TRADE=True
 ```
+
+**本番環境用 (`.env.production`)**:
+```
+GMO_API_KEY=your_production_api_key
+GMO_API_SECRET=your_production_api_secret
+ENV=production
+DEBUG=False
+LOG_LEVEL=INFO
+PAPER_TRADE=False
+```
+
+**セキュリティのベストプラクティス**:
+- 本番環境では**必ず**`DEBUG=False`に設定
+- 開発用と本番用でAPIキーを分離
+- `.env`ファイルは`.gitignore`に追加してバージョン管理から除外
 
 ## 実行方法
 
