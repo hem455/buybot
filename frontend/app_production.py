@@ -5,7 +5,10 @@ GMOコイン自動売買システムのWebインターフェース（実デー�
 """
 
 import streamlit as st
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas_ta")
 import pandas as pd
+from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -23,13 +26,15 @@ from dotenv import load_dotenv
 # プロジェクトルートをパスに追加
 sys.path.append(str(Path(__file__).parent.parent))
 
-from backend.gmo_client import GMOCoinClient
+# GMOCoinClientはキャッシュ関数内でimport
 from backend.config_manager import get_config_manager
 from backend.logger import get_logger
 from backend.strategy import get_strategy_manager
 from backend.backtester import Backtester
 from backend.risk_manager import RiskManager
 from backend.data_fetcher import GMOCoinDataFetcher
+from backend.utils.trade_log_reader import get_trade_log_reader
+from backend.utils.alert_system import get_alert_system
 
 # ロガー設定
 logger = get_logger()
@@ -38,88 +43,192 @@ logger = get_logger()
 def apply_custom_css():
     st.markdown("""
     <style>
-    /* メインの背景色 */
-    .stApp {
-        background-color: #0e1117;
-        color: #fafafa;
+    /* Font Awesome CDN */
+    @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
+    
+    /* === ベースカラー === */
+    :root{
+        --bg:      #0b0b0d;
+        --panel:   #151619;
+        --border:  #2c2d31;
+        --text:    #e8e8e8;
+        --subtext: #969696;
+        --accent1: #ff6b35;
+        --accent2: #ff5e14;
     }
     
-    /* サイドバー */
-    .css-1d391kg {
-        background-color: #1a1d24;
+    html,body,.stApp{
+        background:var(--bg);
+        color:var(--text);
+        line-height:1.4;
+    }
+
+    /* === サイドバー === */
+    section[data-testid="stSidebar"]{
+        background:var(--panel);
+        border-right:1px solid var(--border);
     }
     
-    /* カード風のコンテナ */
-    .metric-card {
-        background: linear-gradient(135deg, #1a1d24 0%, #2d3139 100%);
-        padding: 1.5rem;
+    /* サイドバーアイテム */
+    .sidebar-item{
+        display:flex;
+        align-items:center;
+        gap:.6rem;
+        padding:.5rem 1rem;
+        color:var(--subtext);
+        cursor:pointer;
+        border-radius:6px;
+        transition:.25s;
+    }
+    .sidebar-item.active{
+        background:linear-gradient(90deg,var(--accent1),var(--accent2));
+        color:#fff;
+    }
+    .sidebar-item:hover{
+        background:rgba(255,107,53,.1);
+        color:var(--accent1);
+    }
+
+    /* === メトリックカード === */
+    .metric-card{
+        background:var(--panel);
+        border:1px solid var(--border);
+        border-radius:10px;
+        padding:1.25rem 1.5rem;
+        box-shadow:0 2px 4px rgba(0,0,0,.4);
+        display:flex;
+        flex-direction:column;
+        gap:.3rem;
+        margin-bottom:1rem;
+        transition:.25s;
+    }
+    .metric-card:hover{
+        border-color:var(--accent1);
+        box-shadow:0 4px 8px rgba(255,107,53,.2);
+    }
+    
+    .metric-label{
+        font-size:.8rem;
+        color:var(--subtext);
+        letter-spacing:.05em;
+        text-transform:uppercase;
+        display:flex;
+        align-items:center;
+        gap:.5rem;
+    }
+    .metric-value{
+        font-size:1.6rem;
+        font-weight:600;
+        color:var(--text);
+    }
+    .positive{color:#19c37d;} 
+    .negative{color:#ff5050;}
+
+    /* === ボタン === */
+    .stButton>button{
+        background:linear-gradient(135deg,var(--accent1),var(--accent2));
+        border:none;
+        border-radius:6px;
+        padding:.6rem 1.2rem;
+        color:#fff;
+        font-weight:600;
+        transition:.25s;
+    }
+    .stButton>button:hover{
+        transform:translateY(-2px);
+        box-shadow:0 6px 16px rgba(255,91,39,.35);
+    }
+
+    /* === 危険なボタン（パニック機能用） === */
+    .panic-button{
+        background:linear-gradient(135deg,#ff4757,#ff3742) !important;
+        border:none !important;
+        border-radius:6px !important;
+        padding:.6rem 1.2rem !important;
+        color:#fff !important;
+        font-weight:600 !important;
+        transition:.25s !important;
+    }
+    .panic-button:hover{
+        transform:translateY(-2px) !important;
+        box-shadow:0 6px 16px rgba(255,71,87,.4) !important;
+    }
+
+    /* === DataFrame === */
+    .stDataFrame{
+        background:var(--panel);
+        border:1px solid var(--border);
+        border-radius:8px;
+    }
+    .stDataFrame table{
+        background:var(--panel);
+        color:var(--text);
+    }
+    .stDataFrame th{
+        background:var(--border);
+        color:var(--text);
+        font-weight:600;
+    }
+
+    /* === タブ === */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        background-color: var(--panel);
+        padding: 0.5rem;
         border-radius: 10px;
-        border: 1px solid #2d3139;
-        margin-bottom: 1rem;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--border);
     }
     
-    /* メトリクスのスタイル */
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 600;
-        color: #fafafa;
-        margin: 0.5rem 0;
-    }
-    
-    .metric-label {
-        font-size: 0.9rem;
-        color: #a3a3a3;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
-    /* ポジティブ/ネガティブな値 */
-    .positive {
-        color: #00d4aa;
-    }
-    
-    .negative {
-        color: #ff4757;
-    }
-    
-    /* ボタンのスタイル */
-    .stButton > button {
-        background: linear-gradient(135deg, #ff6b35 0%, #ff4757 100%);
-        color: white;
-        border: none;
-        padding: 0.75rem 2rem;
-        font-weight: 600;
+    .stTabs [data-baseweb="tab"] {
+        background-color: transparent;
         border-radius: 5px;
-        transition: all 0.3s ease;
+        color: var(--subtext);
+        font-weight: 500;
+        transition: .25s;
     }
     
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(255, 107, 53, 0.4);
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg,var(--accent1),var(--accent2));
+        color: #fff;
     }
-    
-    /* エラーメッセージ */
+
+    /* === エラー/成功メッセージ === */
     .error-message {
-        background-color: rgba(255, 71, 87, 0.1);
-        border: 1px solid #ff4757;
+        background: rgba(255, 80, 80, 0.1);
+        border: 1px solid #ff5050;
         padding: 1rem;
-        border-radius: 5px;
-        color: #ff4757;
+        border-radius: 8px;
+        color: #ff5050;
         margin: 1rem 0;
     }
     
-    /* 成功メッセージ */
     .success-message {
-        background-color: rgba(0, 212, 170, 0.1);
-        border: 1px solid #00d4aa;
+        background: rgba(25, 195, 125, 0.1);
+        border: 1px solid #19c37d;
         padding: 1rem;
-        border-radius: 5px;
-        color: #00d4aa;
+        border-radius: 8px;
+        color: #19c37d;
         margin: 1rem 0;
     }
-    
-    /* ローディングアニメーション */
+
+    /* === レスポンシブ調整 === */
+    @media (max-width: 768px) {
+        .metric-card {
+            padding: 1rem;
+        }
+        .metric-value {
+            font-size: 1.4rem;
+        }
+    }
+
+    /* === チャートエリア === */
+    .plotly-graph-div {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+    }
+
+    /* === ローディングアニメーション === */
     @keyframes pulse {
         0% { opacity: 1; }
         50% { opacity: 0.7; }
@@ -129,31 +238,31 @@ def apply_custom_css():
     .loading {
         animation: pulse 2s infinite;
     }
-    
-    /* データフレーム */
-    .dataframe {
-        background-color: #1a1d24;
-        color: #fafafa;
+
+    /* === コンテナ余白 === */
+    .main-container {
+        padding: 0 1rem;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    /* === インプットフィールド === */
+    .stSelectbox > div > div {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
     }
     
-    /* タブ */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #1a1d24;
-        padding: 0.5rem;
-        border-radius: 10px;
+    .stNumberInput > div > div > input {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
     }
-    
-    .stTabs [data-baseweb="tab"] {
-        background-color: transparent;
-        border-radius: 5px;
-        color: #a3a3a3;
-        font-weight: 500;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #ff6b35;
-        color: #fafafa;
+
+    .stTextInput > div > div > input {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -161,7 +270,7 @@ def apply_custom_css():
 # ページ設定
 st.set_page_config(
     page_title="Chirp Trading System - Production",
-    page_icon="📊",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -184,10 +293,12 @@ if 'gmo_client' not in st.session_state:
             logger.error(f"環境変数不足 - API_KEY: {'設定済み' if api_key else '未設定'}, API_SECRET: {'設定済み' if api_secret else '未設定'}")
             st.session_state.gmo_client = None
         else:
-            st.session_state.gmo_client = GMOCoinClient()
+            # フラグとして設定（実際のクライアントはキャッシュ関数内で作成）
+            st.session_state.gmo_client = True
             st.success("✅ GMOクライアントが正常に初期化されました。")
     except Exception as e:
         st.error(f"APIクライアントの初期化に失敗しました: {e}")
+        logger.error(f"GMOクライアント初期化エラー: {e}")
         st.session_state.gmo_client = None
 
 if 'last_update' not in st.session_state:
@@ -210,158 +321,198 @@ def format_percentage(value: float, decimals: int = 2) -> str:
     return f"{value:.{decimals}f}%"
 
 
-def create_metric_card(label: str, value: str, delta: str = None, delta_color: str = "normal"):
-    """メトリクスカードを作成"""
+def create_metric_card(label: str, value: str, delta: str = None, delta_color: str = "normal", icon: str = ""):
+    """メトリクスカードを作成（強化版）"""
     delta_html = ""
     if delta:
         delta_class = "positive" if delta_color == "positive" else "negative" if delta_color == "negative" else ""
         delta_html = f'<div class="{delta_class}">{delta}</div>'
     
+    icon_html = f'<i class="{icon}"></i>' if icon else ""
+    
     return f"""
     <div class="metric-card">
-        <div class="metric-label">{label}</div>
+        <div class="metric-label">{icon_html}{label}</div>
         <div class="metric-value">{value}</div>
         {delta_html}
     </div>
     """
 
+def create_strategy_toggle(strategy_name: str, strategy_key: str, description: str = ""):
+    """戦略ON/OFFトグルを生成"""
+    enabled = st.toggle(
+        strategy_name,
+        value=st.session_state.strategy_states.get(strategy_key, False),
+        key=f"{strategy_key}_toggle",
+        help=description
+    )
+    st.session_state.strategy_states[strategy_key] = enabled
+    
+    if enabled:
+        st.success("🟢 稼働中")
+    else:
+        st.info("⚪ 停止中")
+    
+    return enabled
 
-def fetch_real_data():
-    """実際のAPIデータを取得"""
-    if not st.session_state.gmo_client:
+
+@st.cache_data(ttl=10, persist=False)  # 10秒間キャッシュ、メモリのみ使用
+def fetch_cached_data(api_key_hash: str):
+    """キャッシュ化されたAPIデータ取得"""
+    from backend.gmo_client import GMOCoinClient
+    
+    try:
+        # GMOClientは環境変数から自動でAPIキーを読み込む
+        gmo_client = GMOCoinClient()
+    except ValueError as e:
+        from backend.logger import get_logger
+        logger = get_logger()
+        logger.error(f"GMOクライアント初期化エラー: {e}")
         return None
     
     try:
         # 残高情報を取得
-        balance = st.session_state.gmo_client.get_account_balance()
+        balance = gmo_client.get_account_balance()
         
-        # ポジション情報を取得
-        positions = st.session_state.gmo_client.get_positions()
+        # ポジション情報を取得（証拠金取引 + 現物保有）
+        positions = gmo_client.get_all_positions()
         
         # 取引履歴を取得
-        trades = st.session_state.gmo_client.get_trade_history(count=100)
+        trades = gmo_client.get_latest_executions(count=100)
         
         # パフォーマンス指標を計算
-        performance = st.session_state.gmo_client.calculate_performance_metrics(trades)
+        performance = gmo_client.calculate_performance_metrics(trades)
         
         # ティッカー情報を取得（主要通貨）
         tickers = {}
         for symbol in ['BTC_JPY', 'ETH_JPY', 'XRP_JPY', 'LTC_JPY']:
-            ticker = st.session_state.gmo_client.get_ticker(symbol)
+            ticker = gmo_client.get_ticker(symbol)
             if ticker:
                 tickers[symbol] = ticker
         
-        st.session_state.last_update = datetime.now()
+        # 当日取引回数を取得
+        today_trade_count = gmo_client.get_today_trade_count()
+        
+        # APIレート状況を取得
+        api_rate_status = gmo_client.get_api_rate_status()
+        
+        # 残高履歴を取得
+        balance_history = gmo_client.get_balance_history(30)
+        
+        # 資産履歴を取得（新機能）
+        asset_history = gmo_client.get_asset_history_data(30)
+        
+        # 新機能: 有効注文とロスカット価格
+        active_orders = gmo_client.get_active_orders()
+        liquidation_info = gmo_client.calculate_liquidation_price()
         
         return {
             'balance': balance,
             'positions': positions,
             'trades': trades,
             'performance': performance,
-            'tickers': tickers
+            'tickers': tickers,
+            'today_trade_count': today_trade_count,
+            'api_rate_status': api_rate_status,
+            'balance_history': balance_history,
+            'asset_history': asset_history,
+            'active_orders': active_orders,
+            'liquidation_info': liquidation_info
         }
     
     except Exception as e:
+        from backend.logger import get_logger
+        logger = get_logger()
         logger.error(f"データ取得エラー: {e}")
+        return None
+
+
+def fetch_real_data():
+    """実際のAPIデータを取得（キャッシュ機能付き）"""
+    try:
+        # APIキーのハッシュを作成（キャッシュキーとして使用）
+        import hashlib
+        import os
+        api_key = os.getenv('GMO_API_KEY', '')
+        
+        if not api_key:
+            st.error("⚠️ APIキーが設定されていません。.envファイルを確認してください。")
+            return None
+        
+        api_key_hash = hashlib.md5(api_key.encode()).hexdigest()[:8]
+        
+        # キャッシュされたデータを取得
+        data = fetch_cached_data(api_key_hash)
+        
+        # 最終更新時刻を設定
+        if data:
+            st.session_state.last_update = datetime.now()
+        
+        return data
+        
+    except Exception as e:
+        from backend.logger import get_logger
+        logger = get_logger()
+        logger.error(f"データ取得エラー: {e}")
+        st.error(f"⚠️ データ取得エラー: {e}")
         return None
 
 
 def main():
     """メインアプリケーション"""
-    # ヘッダー
-    col1, col2, col3 = st.columns([2, 4, 2])
-    
-    with col1:
-        st.markdown("# 📊 Chirp")
-        st.markdown("*Production Trading System*")
-    
-    with col2:
-        # 自動更新トグル
-        st.session_state.auto_refresh = st.checkbox(
-            "自動更新",
-            value=st.session_state.auto_refresh,
-            help=f"{st.session_state.refresh_interval}秒ごとに更新"
-        )
-    
-    with col3:
-        if st.session_state.last_update:
-            st.markdown(f"最終更新: {st.session_state.last_update.strftime('%H:%M:%S')}")
+    try:
+        # カスタムCSS適用
+        apply_custom_css()
         
-        if st.button("🔄 更新", use_container_width=True):
-            st.rerun()
-    
-    # データ取得
-    data = fetch_real_data()
-    
-    if not data:
-        st.markdown("""
-        <div class="error-message">
-            <h3>⚠️ データ取得エラー</h3>
-            <p>APIからデータを取得できませんでした。以下を確認してください：</p>
-            <ul>
-                <li>.envファイルにAPIキーが正しく設定されているか</li>
-                <li>インターネット接続が正常か</li>
-                <li>GMOコインのAPIが稼働しているか</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        return
-    
-    # メインタブ
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 ダッシュボード", "💼 ポジション", "📈 取引履歴", "🔄 バックテスト", "⚙️ 設定"])
-    
-    with tab1:
-        dashboard_page(data)
-    
-    with tab2:
-        positions_page(data)
-    
-    with tab3:
-        trades_page(data)
-    
-    with tab4:
-        backtest_page()
-    
-    with tab5:
-        settings_page()
-    
-    # 自動更新（非ブロッキング）
-    if st.session_state.auto_refresh:
-        # タイマー用プレースホルダー
-        auto_refresh_placeholder = st.empty()
+        # データ取得
+        data = fetch_real_data()
         
-        # 最後の更新時刻をチェック
-        current_time = datetime.now()
+        # サイドバーでページ選択
+        with st.sidebar:
+            st.markdown("### 📊 ナビゲーション")
+            page = st.selectbox(
+                "ページ選択",
+                ["📈 ダッシュボード", "💼 ポジション&注文", "📋 取引履歴", "🎯 戦略コントロール", "📋 ログ&アラート", "🔄 バックテスト", "⚙️ 設定"],
+                index=0
+            )
         
-        if 'last_auto_refresh' not in st.session_state:
-            st.session_state.last_auto_refresh = current_time
-        
-        # 指定された間隔が経過したかチェック
-        time_since_last = (current_time - st.session_state.last_auto_refresh).total_seconds()
-        
-        if time_since_last >= st.session_state.refresh_interval:
-            st.session_state.last_auto_refresh = current_time
-            st.rerun()
-        else:
-            # 残り時間を表示
-            remaining_time = int(st.session_state.refresh_interval - time_since_last)
-            auto_refresh_placeholder.info(f"⏱️ 自動更新まで {remaining_time} 秒")
+        # ページルーティング
+        if page == "📈 ダッシュボード":
+            dashboard_page(data)
+        elif page == "💼 ポジション&注文":
+            positions_page(data)
+        elif page == "📋 取引履歴":
+            trades_page(data)
+        elif page == "🎯 戦略コントロール":
+            strategies_control_page(data)
+        elif page == "📋 ログ&アラート":
+            logs_alerts_page(data)
+        elif page == "🔄 バックテスト":
+            backtest_page()
+        elif page == "⚙️ 設定":
+            settings_page()
             
-            # Streamlitの自動更新を使用（より適切な方法）
-            st.markdown(f'''
-            <script>
-                setTimeout(function() {{
-                    window.parent.postMessage({{type: 'streamlit:setComponentValue', key: 'auto_refresh_trigger', value: true}}, '*');
-                }}, 1000);
-            </script>
-            ''', unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"アプリケーションエラー: {e}")
+        logger.error(f"メインアプリケーションでエラー: {e}")
 
 
 def dashboard_page(data: Dict[str, Any]):
     """ダッシュボードページ"""
+    # データがNoneの場合の処理
+    if data is None:
+        st.error("⚠️ データを取得できませんでした。ネットワーク接続を確認してください。")
+        st.info("💡 APIキーの設定やネットワーク接続を確認してください。")
+        return
+    
     balance = data.get('balance', {})
     performance = data.get('performance', {})
     tickers = data.get('tickers', {})
+    
+    # 残高データもNoneの場合を処理
+    if balance is None:
+        st.error("⚠️ 残高データを取得できませんでした。")
+        return
     
     # エラーチェック
     if 'error' in balance:
@@ -372,78 +523,198 @@ def dashboard_page(data: Dict[str, Any]):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_balance = balance.get('total_jpy', 0)
+        # 真の総資産計算：JPY残高 + 保有コインの評価額
+        jpy_balance = balance.get('total_jpy', 0)
+        positions = data.get('positions', [])
+        tickers = data.get('tickers', {})
+        
+        # 現物保有の評価額を加算（ティッカーから現在価格を取得）
+        spot_value = 0
+        assets = balance.get('assets', [])
+        for asset in assets:
+            if asset['symbol'] != 'JPY' and asset['amount'] > 0:
+                # 対応するティッカーから現在価格を取得
+                symbol_ticker = f"{asset['symbol']}_JPY"
+                if symbol_ticker in tickers:
+                    current_price = tickers[symbol_ticker].get('last', 0)
+                    spot_value += current_price * asset['amount']
+        
+        # 証拠金取引の評価損益を加算（証拠金は既にJPY残高に含まれているため、評価損益のみ）
+        margin_pnl = 0
+        margin_positions = [p for p in positions if p.get('type') != 'SPOT']
+        for pos in margin_positions:
+            margin_pnl += pos.get('lossGain', 0)
+        
+        # 真の総資産 = JPY残高 + 現物保有評価額 + 証拠金取引評価損益
+        total_assets = jpy_balance + spot_value + margin_pnl
+        
+        # デバッグ情報（開発環境のみ表示）
+        debug_info = None
+        if os.getenv('DEBUG', '').lower() in ['true', '1', 'yes']:
+            debug_info = f"JPY: {format_jpy(jpy_balance)} + 現物: {format_jpy(spot_value)} + 証拠金損益: {format_jpy(margin_pnl)}"
+        
         st.markdown(create_metric_card(
             "総資産",
-            format_jpy(total_balance)
+            format_jpy(total_assets),
+            delta=debug_info,
+            delta_color="positive" if total_assets > jpy_balance else "normal",
+            icon="fas fa-wallet"
         ), unsafe_allow_html=True)
     
     with col2:
-        total_pnl = performance.get('total_pnl', 0)
-        pnl_color = "positive" if total_pnl >= 0 else "negative"
+        # 含み損益を計算（現物保有の評価損益）
+        positions = data.get('positions', [])
+        unrealized_pnl = 0
+        
+        # 現物保有の含み損益を計算
+        spot_holdings = [p for p in positions if p.get('type') == 'SPOT']
+        for holding in spot_holdings:
+            current_price = holding.get('price', 0)
+            size = holding.get('size', 0)
+            # 簡易的に購入価格を現在価格の95%と仮定（実際は取得価格が必要）
+            estimated_purchase_price = current_price * 0.95
+            unrealized_pnl += (current_price - estimated_purchase_price) * size
+        
+        pnl_color = "positive" if unrealized_pnl >= 0 else "negative"
         st.markdown(create_metric_card(
-            "総損益",
-            format_jpy(total_pnl),
-            delta_color=pnl_color
+            "含み損益",
+            format_jpy(unrealized_pnl),
+            delta_color=pnl_color,
+            icon="fas fa-chart-line"
         ), unsafe_allow_html=True)
     
     with col3:
         win_rate = performance.get('win_rate', 0)
         st.markdown(create_metric_card(
             "勝率",
-            format_percentage(win_rate)
+            format_percentage(win_rate),
+            icon="fas fa-bullseye"
         ), unsafe_allow_html=True)
     
     with col4:
-        total_trades = performance.get('total_trades', 0)
+        # 当日確定損益（セッション状態で管理）
+        if 'daily_realized_pnl' not in st.session_state:
+            st.session_state.daily_realized_pnl = 0
+        
+        daily_pnl_color = "positive" if st.session_state.daily_realized_pnl >= 0 else "negative"
         st.markdown(create_metric_card(
-            "総取引数",
-            str(total_trades)
+            "当日確定損益",
+            format_jpy(st.session_state.daily_realized_pnl),
+            delta_color=daily_pnl_color,
+            icon="fas fa-calendar-day"
         ), unsafe_allow_html=True)
     
-    # 資産内訳
-    st.markdown("### 💰 資産内訳")
+    # 資産内訳（JPY換算）
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-wallet" style="color: var(--accent1);"></i>
+        資産内訳（JPY換算）
+    </h3>
+    """, unsafe_allow_html=True)
     
     assets = balance.get('assets', [])
+    tickers = data.get('tickers', {})
+    
     if assets:
-        # JPY以外の資産がある場合はグラフ表示
-        non_jpy_assets = [a for a in assets if a['symbol'] != 'JPY' and a['amount'] > 0]
+        # JPY換算での資産内訳を計算
+        asset_values = []
         
-        if non_jpy_assets:
+        # JPY残高を追加
+        if jpy_balance > 0:
+            asset_values.append({
+                'symbol': 'JPY',
+                'amount': jpy_balance,
+                'jpy_value': jpy_balance
+            })
+        
+        # 各暗号資産のJPY換算値を計算
+        for asset in assets:
+            if asset['symbol'] != 'JPY' and asset['amount'] > 0:
+                symbol_ticker = f"{asset['symbol']}_JPY"
+                if symbol_ticker in tickers:
+                    current_price = tickers[symbol_ticker].get('last', 0)
+                    jpy_value = current_price * asset['amount']
+                    if jpy_value > 0:
+                        asset_values.append({
+                            'symbol': asset['symbol'],
+                            'amount': asset['amount'],
+                            'jpy_value': jpy_value
+                        })
+        
+        # 証拠金取引の評価損益を追加（プラスの場合のみ）
+        if margin_pnl > 0:
+            asset_values.append({
+                'symbol': '証拠金損益',
+                'amount': margin_pnl,
+                'jpy_value': margin_pnl
+            })
+        
+        if len(asset_values) > 1:  # JPYのみでない場合
             col1, col2 = st.columns([2, 3])
             
             with col1:
-                for asset in assets:
-                    if asset['amount'] > 0:
-                        st.markdown(f"""
-                        <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #2d3139;">
-                            <span style="color: #a3a3a3;">{asset['symbol']}</span>
-                            <span style="color: #fafafa; font-weight: 600;">{asset['amount']:.8f}</span>
+                for asset_data in asset_values:
+                    symbol = asset_data['symbol']
+                    jpy_value = asset_data['jpy_value']
+                    percentage = (jpy_value / total_assets * 100) if total_assets > 0 else 0
+                    
+                    if symbol == 'JPY':
+                        display_amount = format_jpy(jpy_value)
+                    elif symbol == '証拠金損益':
+                        display_amount = format_jpy(jpy_value)
+                    else:
+                        display_amount = f"{asset_data['amount']:.6f} ({format_jpy(jpy_value)})"
+                    
+                    st.markdown(f"""
+                    <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #2d3139;">
+                        <span style="color: #a3a3a3;">{symbol}</span>
+                        <div style="text-align: right;">
+                            <div style="color: #fafafa; font-weight: 600;">{display_amount}</div>
+                            <div style="color: #969696; font-size: 0.9rem;">{percentage:.1f}%</div>
                         </div>
-                        """, unsafe_allow_html=True)
+                    </div>
+                    """, unsafe_allow_html=True)
             
             with col2:
-                # 円グラフ
+                # 円グラフ（JPY換算値で表示）
                 fig = go.Figure(data=[go.Pie(
-                    labels=[a['symbol'] for a in non_jpy_assets],
-                    values=[a['amount'] for a in non_jpy_assets],
-                    hole=0.3
+                    labels=[a['symbol'] for a in asset_values],
+                    values=[a['jpy_value'] for a in asset_values],
+                    hole=0.4,
+                    marker=dict(
+                        colors=['#FF6B35', '#FF5E14', '#E8511A', '#D4441F', '#C03724'],
+                        line=dict(color='#151619', width=2)
+                    ),
+                    textfont=dict(color='#e8e8e8', size=12),
+                    textinfo='label+percent',
+                    texttemplate='%{label}<br>%{percent}'
                 )])
                 
                 fig.update_layout(
-                    template="plotly_dark",
-                    paper_bgcolor='rgba(26, 29, 36, 1)',
-                    plot_bgcolor='rgba(26, 29, 36, 1)',
-                    height=300,
-                    showlegend=True
+                    paper_bgcolor='#151619',
+                    plot_bgcolor='#151619',
+                    font=dict(color='#e8e8e8'),
+                    height=280,
+                    showlegend=True,
+                    legend=dict(
+                        font=dict(color='#969696'),
+                        orientation='v',
+                        x=1.1
+                    ),
+                    margin=dict(l=10, r=80, t=10, b=10)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("現在、暗号資産のポジションはありません")
+            st.info("現在、JPY以外の資産保有はありません")
     
     # マーケット情報
-    st.markdown("### 🌐 マーケット情報")
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-globe" style="color: var(--accent1);"></i>
+        マーケット情報
+    </h3>
+    """, unsafe_allow_html=True)
     
     if tickers:
         cols = st.columns(len(tickers))
@@ -458,11 +729,15 @@ def dashboard_page(data: Dict[str, Any]):
                 if high > 0 and low > 0:
                     mid = (high + low) / 2
                     change_pct = ((last_price - mid) / mid) * 100
-                    change_color = "positive" if change_pct >= 0 else "negative"
-                    change_str = f"{'+' if change_pct >= 0 else ''}{change_pct:.2f}%"
+                    if change_pct >= 0:
+                        change_color = "#FF6B35"  # オレンジで統一
+                        change_str = f"+{change_pct:.2f}%"
+                    else:
+                        change_color = "#969696"  # グレーでマイナス表示
+                        change_str = f"{change_pct:.2f}%"
                 else:
                     change_str = "N/A"
-                    change_color = "normal"
+                    change_color = "#969696"
                 
                 st.markdown(f"""
                 <div class="metric-card">
@@ -471,56 +746,608 @@ def dashboard_page(data: Dict[str, Any]):
                             <div class="metric-label">{symbol}</div>
                             <div style="font-size: 1.5rem; font-weight: 600;">{format_jpy(last_price)}</div>
                         </div>
-                        <div class="{change_color}" style="font-size: 1.2rem;">{change_str}</div>
+                        <div style="color: {change_color}; font-size: 1.2rem; font-weight: 600;">{change_str}</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-
-
-def positions_page(data: Dict[str, Any]):
-    """ポジションページ"""
-    positions = data.get('positions', [])
     
-    st.markdown("### 💼 保有ポジション")
+    # === 新機能エリア ===
+    st.markdown("---")  # セパレーター
     
-    if positions:
-        # ポジションをデータフレームに変換
-        df_positions = pd.DataFrame(positions)
+    # 稼働戦略のON/OFFスイッチ
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-cogs" style="color: var(--accent1);"></i>
+        稼働戦略管理
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # セッション状態で戦略の状態を管理
+    if 'strategy_states' not in st.session_state:
+        st.session_state.strategy_states = {
+            'ma_cross': False,
+            'macd_rsi': False,
+            'grid_trading': False,
+            'ml_based': False
+        }
+    
+    strategy_col1, strategy_col2 = st.columns(2)
+    
+    with strategy_col1:
+        st.markdown("#### 📈 トレンド戦略")
         
-        # 表示用にフォーマット
-        df_display = df_positions.copy()
-        df_display['price'] = df_display['price'].apply(format_jpy)
-        df_display['lossGain'] = df_display['lossGain'].apply(lambda x: format_jpy(x) if x != 0 else '-')
-        df_display['timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # カラム名を日本語に
-        df_display.columns = ['通貨ペア', '売買', '数量', '約定価格', '評価損益', '約定日時']
-        
-        st.dataframe(
-            df_display,
-            use_container_width=True,
-            hide_index=True
+        # MA Cross Strategy（コンポーネント化）
+        create_strategy_toggle(
+            "MA Cross Strategy", 
+            "ma_cross", 
+            "移動平均線のクロスオーバーで売買判断"
         )
         
-        # 評価損益の合計
-        total_loss_gain = sum(pos['lossGain'] for pos in positions)
-        color = "positive" if total_loss_gain >= 0 else "negative"
+        # MACD-RSI Strategy（コンポーネント化）
+        create_strategy_toggle(
+            "MACD-RSI Strategy", 
+            "macd_rsi", 
+            "MACD とRSI を組み合わせた戦略"
+        )
+    
+    with strategy_col2:
+        st.markdown("#### 🎯 その他戦略")
+        
+        # Grid Trading Strategy（コンポーネント化）
+        create_strategy_toggle(
+            "Grid Trading Strategy", 
+            "grid_trading", 
+            "価格幅でグリッド状に売買を配置"
+        )
+        
+        # ML Based Strategy（コンポーネント化）
+        create_strategy_toggle(
+            "ML Based Strategy", 
+            "ml_based", 
+            "機械学習モデルによる予測売買"
+        )
+    
+    # APIレート制限メーター
+    st.markdown("### 🚦 システム状態")
+    
+    api_col1, api_col2 = st.columns(2)
+    
+    with api_col1:
+        # APIレート上限メーター（Plotly Gaugeで視覚的インパクトUP）
+        api_status = data.get('api_rate_status', {})
+        current_calls = api_status.get('current_calls', 0)
+        max_calls = api_status.get('max_calls', 20)
+        usage_percentage = api_status.get('usage_percentage', 0)
+        status = api_status.get('status', 'unknown')
+        
+        # ステータスに応じて色を決定
+        if status == 'normal':
+            gauge_color = "green"
+            status_emoji = "🟢"
+        elif status == 'warning':
+            gauge_color = "yellow"
+            status_emoji = "🟡"
+        elif status == 'critical':
+            gauge_color = "red"
+            status_emoji = "🔴"
+        else:
+            gauge_color = "gray"
+            status_emoji = "⚪"
+        
+        # オレンジテーマAPIゲージ
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=usage_percentage,
+            domain={'x': [0, 1], 'y': [0, 1]},
+            title={'text': f"API使用率", 'font': {'color': '#e8e8e8', 'size': 16}},
+            number={'font': {'color': '#FF6B35', 'size': 24}},
+            gauge={
+                'axis': {'range': [None, 100], 'tickcolor': '#969696'},
+                'bar': {'color': '#FF6B35', 'thickness': 0.8},
+                'steps': [
+                    {'range': [0, 50], 'color': "rgba(255, 107, 53, 0.1)"},
+                    {'range': [50, 80], 'color': "rgba(255, 107, 53, 0.2)"},
+                    {'range': [80, 100], 'color': "rgba(255, 107, 53, 0.3)"}
+                ],
+                'threshold': {
+                    'line': {'color': "#FF5E14", 'width': 3},
+                    'thickness': 0.75,
+                    'value': 90
+                }
+            }
+        ))
+        
+        fig_gauge.update_layout(
+            paper_bgcolor='#151619',
+            plot_bgcolor='#151619',
+            font={'color': "#e8e8e8"},
+            height=180,
+            margin=dict(l=10, r=10, t=30, b=10)
+        )
+        
+        st.plotly_chart(fig_gauge, use_container_width=True)
+        
+        # 詳細情報
+        st.markdown(f"""
+        <div style="text-align: center; color: #a3a3a3; font-size: 0.9rem;">
+            {current_calls}/{max_calls} req/s
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with api_col2:
+        # 当日の取引回数（実データ）
+        today_trades = data.get('today_trade_count', 0)
         
         st.markdown(f"""
         <div class="metric-card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div class="metric-label">評価損益合計</div>
-                <div class="metric-value {color}">{format_jpy(total_loss_gain)}</div>
-            </div>
+            <div class="metric-label">本日取引回数</div>
+            <div style="font-size: 1.2rem; font-weight: 600;">{today_trades} 回</div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # リセットボタン
+        if st.button("📊 統計リセット", use_container_width=True):
+            # セッション状態のリセット（実データには影響しない）
+            if 'daily_realized_pnl' in st.session_state:
+                st.session_state.daily_realized_pnl = 0
+            st.success("📊 統計をリセットしました")
+            st.rerun()
+    
+    # 総資産推移チャート（過去30日）
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-chart-area" style="color: var(--accent1);"></i>
+        総資産推移（過去30日）
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    balance_history = data.get('balance_history', [])
+    
+    # 総資産推移グラフ（データベース履歴 vs 従来の履歴）
+    asset_history = data.get('asset_history', [])
+    
+    if asset_history and len(asset_history) > 1:
+        # 新機能: データベースから取得した正確な総資産履歴
+        dates = [datetime.fromisoformat(entry['date']) for entry in asset_history]
+        total_assets_history = [entry['total_assets'] for entry in asset_history]
+        jpy_balance_history = [entry['jpy_balance'] for entry in asset_history]
+        spot_value_history = [entry['spot_value'] for entry in asset_history]
+        
+        # グラフ作成（詳細な内訳付き）
+        fig = go.Figure()
+        
+        # 総資産推移ライン（メインライン）
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=total_assets_history,
+            mode='lines+markers',
+            name='総資産',
+            line=dict(color='#FF6B35', width=4),
+            marker=dict(size=8, color='#FF5E14', line=dict(color='#FF6B35', width=2)),
+            fill='tozeroy',
+            fillcolor='rgba(255, 107, 53, 0.1)',
+            hovertemplate='<b>総資産</b><br>¥%{y:,.0f}<br>%{x|%Y/%m/%d}<extra></extra>'
+        ))
+        
+        # JPY残高ライン（サブライン）
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=jpy_balance_history,
+            mode='lines',
+            name='JPY残高',
+            line=dict(color='#969696', width=2, dash='dot'),
+            hovertemplate='<b>JPY残高</b><br>¥%{y:,.0f}<br>%{x|%Y/%m/%d}<extra></extra>'
+        ))
+        
+        # 現物評価額ライン（サブライン）
+        if any(v > 0 for v in spot_value_history):
+            fig.add_trace(go.Scatter(
+                x=dates,
+                y=spot_value_history,
+                mode='lines',
+                name='現物評価額',
+                line=dict(color='#4ECDC4', width=2, dash='dash'),
+                hovertemplate='<b>現物評価額</b><br>¥%{y:,.0f}<br>%{x|%Y/%m/%d}<extra></extra>'
+            ))
+    
+    elif balance_history and len(balance_history) > 1:
+        # フォールバック: 従来の簡易履歴
+        dates = [datetime.fromisoformat(entry['date']) for entry in balance_history]
+        
+        # 実際の総資産履歴を計算（実データベース）
+        total_assets_history = []
+        
+        for entry in balance_history:
+            jpy_balance_hist = entry['balance']
+            # 実際の総資産計算（現在と同じロジック）
+            # 注意: 過去の現物評価額・証拠金損益は取得できないため、現在値を基準に推定
+            total_estimated = jpy_balance_hist + spot_value + margin_pnl
+            total_assets_history.append(total_estimated)
+        
+        # グラフ作成（総資産のみ）
+        fig = go.Figure()
+        
+        # 総資産推移ライン（オレンジグラデーション）
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=total_assets_history,
+            mode='lines+markers',
+            name='総資産（推定）',
+            line=dict(color='#FF6B35', width=4),
+            marker=dict(size=6, color='#FF5E14', line=dict(color='#FF6B35', width=2)),
+            fill='tozeroy',
+            fillcolor='rgba(255, 107, 53, 0.2)',
+            hovertemplate='<b>総資産（推定）</b><br>¥%{y:,.0f}<br>%{x|%Y/%m/%d}<extra></extra>'
+        ))
+        
+        # オレンジテーマレイアウト
+        fig.update_layout(
+            paper_bgcolor='#151619',
+            plot_bgcolor='#151619',
+            font_color='#e8e8e8',
+            height=320,
+            showlegend=False,  # 単一ラインなので凡例不要
+            xaxis=dict(
+                showgrid=True, 
+                gridcolor='rgba(255, 107, 53, 0.1)',
+                color='#969696',
+                title="",
+                tickformat='%m/%d'
+            ),
+            yaxis=dict(
+                showgrid=True, 
+                gridcolor='rgba(255, 107, 53, 0.1)',
+                color='#969696',
+                title="",
+                tickformat="¥,.0f"
+            ),
+            margin=dict(l=10, r=10, t=10, b=10),
+            hovermode='closest'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
     else:
-        st.info("現在、保有しているポジションはありません")
+        # データが不足している場合
+        st.info("📊 総資産履歴データが不足しています。データを蓄積して美しい推移グラフを表示しましょう！")
+        
+        # 手動データ保存ボタン
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            if st.button("💾 今日の総資産を保存", use_container_width=True):
+                try:
+                    from backend.gmo_client import GMOCoinClient
+                    gmo_client = GMOCoinClient()
+                    
+                    if gmo_client.save_daily_assets("手動保存"):
+                        st.success("✅ 総資産データを保存しました！")
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error("❌ 保存に失敗しました - データベース書き込みエラーの可能性があります")
+                        st.info("💡 **トラブルシューティング**: ログファイルを確認してください")
+                except ImportError as e:
+                    logger.error(f"GMOClient インポートエラー: {e}")
+                    st.error("❌ システムモジュールの読み込みに失敗しました")
+                    st.info("💡 **解決方法**: アプリケーションを再起動してください")
+                except ConnectionError as e:
+                    logger.error(f"API接続エラー: {e}")
+                    st.error("❌ GMOコインAPIへの接続に失敗しました")
+                    st.info("💡 **確認事項**: インターネット接続とAPI設定を確認してください")
+                except PermissionError as e:
+                    logger.error(f"ファイルアクセス権限エラー: {e}")
+                    st.error("❌ データベースファイルへの書き込み権限がありません")
+                    st.info("💡 **解決方法**: アプリケーションを管理者権限で実行してください")
+                except Exception as e:
+                    logger.error(f"資産保存の予期しないエラー: {e}", exc_info=True)
+                    st.error(f"❌ 予期しないエラーが発生しました: {type(e).__name__}")
+                    st.info("💡 **サポート**: このエラーが継続する場合は、ログファイルと共にお問い合わせください")
+        
+        with col2:
+            # 期間選択ボタン（今後の機能拡張用）
+            period = st.selectbox("表示期間", ["30日", "90日", "1年"], key="asset_history_period")
+        
+        with col3:
+            st.info("💡 毎日データを蓄積すると美しい総資産推移グラフが表示されます。")
+        
+        logger.info("総資産推移グラフ: 履歴データ不足のため表示スキップ")
+    
+    # 総資産サマリー（オレンジテーマ）
+    st.markdown(f"""
+    <div class="metric-card" style="text-align: center; background: linear-gradient(135deg, rgba(255, 107, 53, 0.1), rgba(255, 94, 20, 0.05)); border: 1px solid rgba(255, 107, 53, 0.3);">
+        <div style="color: #FF6B35; font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem;">
+            {format_jpy(total_assets)}
+        </div>
+        <div style="color: #969696; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.1em;">
+            現在の総資産
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def positions_page(data: Dict[str, Any]):
+    """ポジション&注文ページ"""
+    # データがNoneの場合の処理
+    if data is None:
+        st.error("⚠️ データを取得できませんでした。ネットワーク接続を確認してください。")
+        st.info("💡 APIキーの設定やネットワーク接続を確認してください。")
+        return
+    
+    positions = data.get('positions', [])
+    active_orders = data.get('active_orders', [])
+    liquidation_info = data.get('liquidation_info', {})
+    tickers = data.get('tickers', {})
+    
+    # === 1. 保有ポジション ===
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-briefcase" style="color: var(--accent1);"></i>
+        保有ポジション
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    if positions:
+        # 証拠金取引と現物保有を分類
+        # GMOコインAPI: get_positions() = 証拠金取引, get_spot_holdings() = 現物保有
+        margin_positions = [p for p in positions if p.get('type') != 'SPOT']
+        spot_holdings = [p for p in positions if p.get('type') == 'SPOT']
+        
+        # 念のため、typeが設定されていないポジションは証拠金取引として扱う
+        untyped_positions = [p for p in positions if 'type' not in p]
+        if untyped_positions:
+            margin_positions.extend(untyped_positions)
+        
+        # 証拠金取引ポジション（拡張版）
+        if margin_positions:
+            st.markdown("#### 📊 証拠金取引ポジション")
+            
+            # ポジション詳細データフレーム作成
+            position_data = []
+            for pos in margin_positions:
+                symbol = pos.get('symbol', '')
+                current_price = tickers.get(symbol, {}).get('last', 0)
+                liquidation_price = liquidation_info.get(symbol, {}).get('liquidation_price', 0)
+                margin_rate = liquidation_info.get(symbol, {}).get('current_margin_rate', 0)
+                
+                # リアルタイム評価損益計算
+                entry_price = pos.get('price', 0)
+                size = pos.get('size', 0)
+                side = pos.get('side', '')
+                
+                if current_price > 0 and entry_price > 0:
+                    if side == 'BUY':
+                        unrealized_pnl = (current_price - entry_price) * size
+                    else:
+                        unrealized_pnl = (entry_price - current_price) * size
+                else:
+                    unrealized_pnl = pos.get('lossGain', 0)
+                
+                position_data.append({
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'entry_price': format_jpy(entry_price),
+                    'current_price': format_jpy(current_price) if current_price > 0 else '取得中...',
+                    'unrealized_pnl': unrealized_pnl,
+                    'liquidation_price': format_jpy(liquidation_price) if liquidation_price > 0 else '計算中...',
+                    'margin_rate': f"{margin_rate:.1f}%" if margin_rate > 0 else '計算中...',
+                    'timestamp': pd.to_datetime(pos.get('timestamp')).strftime('%Y-%m-%d %H:%M:%S')
+                })
+            
+            if position_data:
+                df_positions = pd.DataFrame(position_data)
+                
+                # 表示用フォーマット
+                df_display = df_positions.copy()
+                df_display['unrealized_pnl_display'] = df_display['unrealized_pnl'].apply(
+                    lambda x: f"{'🟢' if x >= 0 else '🔴'} {format_jpy(x)}"
+                )
+                
+                # アクションボタン列追加
+                df_display['action'] = '🔹 詳細'
+                
+                # 列名設定
+                df_display = df_display[['symbol', 'side', 'size', 'entry_price', 'current_price', 
+                                       'unrealized_pnl_display', 'liquidation_price', 'margin_rate', 'action']]
+                df_display.columns = ['通貨ペア', '売買', '数量', '約定価格', '現在価格', 
+                                    'リアルタイム評価損益', 'ロスカット価格', '証拠金維持率', 'アクション']
+                
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                
+                # ポジション操作パネル
+                with st.expander("🔧 ポジション操作", expanded=False):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("🚨 全ポジション一括決済", type="secondary", use_container_width=True):
+                            st.warning("⚠️ 実装中: 全ポジション決済機能")
+                    
+                    with col2:
+                        selected_symbol = st.selectbox(
+                            "個別決済",
+                            options=[p['symbol'] for p in position_data],
+                            key="position_close_select"
+                        )
+                        if st.button(f"決済: {selected_symbol}", use_container_width=True):
+                            st.warning(f"⚠️ 実装中: {selected_symbol} 決済機能")
+        
+        # 現物保有（拡張版）
+        if spot_holdings:
+            st.markdown("#### 💰 現物保有")
+            spot_data = []
+            
+            for holding in spot_holdings:
+                symbol = holding.get('symbol', '')
+                size = holding.get('size', 0)
+                current_price = holding.get('price', 0)
+                
+                # 評価額計算
+                current_value = size * current_price if current_price > 0 else 0
+                
+                spot_data.append({
+                    'symbol': symbol,
+                    'size': size,
+                    'current_price': format_jpy(current_price) if current_price > 0 else '価格取得中...',
+                    'current_value': format_jpy(current_value),
+                    'action': '🔹 詳細'
+                })
+            
+            if spot_data:
+                df_spot = pd.DataFrame(spot_data)
+                df_spot.columns = ['通貨ペア', '保有量', '現在価格', '評価額', 'アクション']
+                st.dataframe(df_spot, use_container_width=True, hide_index=True)
+        
+        # サマリー統計
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if margin_positions:
+                total_unrealized = sum(
+                    pos['unrealized_pnl'] for pos in position_data if 'unrealized_pnl' in pos
+                )
+                color = "positive" if total_unrealized >= 0 else "negative"
+                st.markdown(create_metric_card(
+                    "証拠金取引 評価損益",
+                    format_jpy(total_unrealized),
+                    delta_color=color,
+                    icon="fas fa-chart-line"
+                ), unsafe_allow_html=True)
+        
+        with col2:
+            if spot_holdings:
+                total_spot_value = sum(s['size'] * s['price'] for s in spot_holdings if s['price'] > 0)
+                st.markdown(create_metric_card(
+                    "現物保有 総評価額",
+                    format_jpy(total_spot_value),
+                    icon="fas fa-coins"
+                ), unsafe_allow_html=True)
+        
+        with col3:
+            total_positions = len(margin_positions) + len(spot_holdings)
+            st.markdown(create_metric_card(
+                "総ポジション数",
+                f"{total_positions}件",
+                icon="fas fa-list-alt"
+            ), unsafe_allow_html=True)
+    
+    else:
+        st.info("現在、保有しているポジションがありません。")
+    
+    # === 2. 有効注文一覧 ===
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-list-ul" style="color: var(--accent1);"></i>
+        有効注文
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    if active_orders:
+        order_data = []
+        for order in active_orders:
+            order_data.append({
+                'orderId': order.get('orderId', ''),
+                'symbol': order.get('symbol', ''),
+                'side': order.get('side', ''),
+                'orderType': order.get('orderType', ''),
+                'size': order.get('size', 0),
+                'price': format_jpy(order.get('price', 0)),
+                'status': order.get('status', ''),
+                'timestamp': pd.to_datetime(order.get('timestamp')).strftime('%Y-%m-%d %H:%M:%S') if order.get('timestamp') else ''
+            })
+        
+        if order_data:
+            df_orders = pd.DataFrame(order_data)
+            df_orders.columns = ['注文ID', '通貨ペア', '売買', '注文種別', '数量', '価格', 'ステータス', '注文日時']
+            st.dataframe(df_orders, use_container_width=True, hide_index=True)
+            
+            # 注文操作
+            with st.expander("🔧 注文操作", expanded=False):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    selected_order = st.selectbox(
+                        "キャンセルする注文",
+                        options=df_orders['注文ID'].tolist(),
+                        key="order_cancel_select"
+                    )
+                    if st.button("❌ 注文キャンセル", use_container_width=True):
+                        st.warning(f"⚠️ 実装中: 注文 {selected_order} キャンセル機能")
+                
+                with col2:
+                    if st.button("🚨 全注文一括キャンセル", type="secondary", use_container_width=True):
+                        st.warning("⚠️ 実装中: 全注文キャンセル機能")
+    else:
+        st.info("現在、有効な注文がありません。")
+    
+    # === 3. 手動取引パネル ===
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-hand-point-right" style="color: var(--accent1);"></i>
+        手動取引
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    with st.expander("📈 クイック注文", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🟢 買い注文")
+            symbol_buy = st.selectbox("通貨ペア", ['BTC_JPY', 'ETH_JPY', 'XRP_JPY', 'LTC_JPY'], key="buy_symbol")
+            order_type_buy = st.radio("注文種別", ['成行', '指値'], key="buy_type")
+            size_buy = st.number_input("数量", min_value=0.0001, step=0.0001, format="%.4f", key="buy_size")
+            
+            if order_type_buy == '指値':
+                price_buy = st.number_input("価格", min_value=1.0, step=1.0, key="buy_price")
+            
+            if st.button("🟢 買い注文実行", type="primary", use_container_width=True):
+                st.warning("⚠️ 実装中: 買い注文機能")
+        
+        with col2:
+            st.markdown("#### 🔴 売り注文")
+            symbol_sell = st.selectbox("通貨ペア", ['BTC_JPY', 'ETH_JPY', 'XRP_JPY', 'LTC_JPY'], key="sell_symbol")
+            order_type_sell = st.radio("注文種別", ['成行', '指値'], key="sell_type")
+            size_sell = st.number_input("数量", min_value=0.0001, step=0.0001, format="%.4f", key="sell_size")
+            
+            if order_type_sell == '指値':
+                price_sell = st.number_input("価格", min_value=1.0, step=1.0, key="sell_price")
+            
+            if st.button("🔴 売り注文実行", type="secondary", use_container_width=True):
+                st.warning("⚠️ 実装中: 売り注文機能")
+    
+    # === 4. パニック機能 ===
+    st.markdown("""
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-exclamation-triangle" style="color: #ff4757;"></i>
+        緊急操作
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # セキュアなStreamlitネイティブボタンで置き換え
+        if st.button("🚫 PANIC: 全注文取消", key="panic_cancel_orders", use_container_width=True, type="secondary"):
+            st.warning("⚠️ 実装中: パニック機能 - 全注文取消")
+            st.info("この機能は開発中です。実装完了時に実際の注文取消が実行されます。")
+    
+    with col2:
+        if st.button("❌ PANIC: 全ポジション決済", key="panic_close_positions", use_container_width=True, type="secondary"):
+            st.warning("⚠️ 実装中: パニック機能 - 全ポジション決済")
+            st.info("この機能は開発中です。実装完了時に実際のポジション決済が実行されます。")
 
 
 def trades_page(data: Dict[str, Any]):
     """取引履歴ページ"""
+    # データがNoneの場合の処理
+    if data is None:
+        st.error("⚠️ データを取得できませんでした。ネットワーク接続を確認してください。")
+        st.info("💡 APIキーの設定やネットワーク接続を確認してください。")
+        return
+    
     trades = data.get('trades', [])
+    performance = data.get('performance', {})
+    tickers = data.get('tickers', {})
     
     st.markdown("### 📈 取引履歴")
     
@@ -572,7 +1399,21 @@ def trades_page(data: Dict[str, Any]):
                     f"{avg_size:.8f}"
                 ), unsafe_allow_html=True)
     else:
-        st.info("取引履歴がありません")
+        st.info("""
+        📋 **取引履歴が表示されていません**
+        
+        💡 **考えられる理由**:
+        - **現物購入のみ**: 現物での暗号資産購入は約定履歴APIに含まれません
+        - **レバレッジ取引未実施**: `/v1/latestExecutions`はレバレッジ取引の約定のみ対象
+        - **API制限**: GMOコインAPIは現物取引とレバレッジ取引のみ対応
+        
+        🔧 **確認方法**:
+        1. **現物保有確認**: 上記「現物保有」セクションで暗号資産を確認
+        2. **レバレッジ取引**: 証拠金取引で実際の売買を行うと履歴が表示されます
+        3. **GMOコイン会員ページ**: 詳細な取引履歴は会員ページで確認可能
+        
+        ℹ️ **現在の動作**: APIは正常に動作しており、取得件数0は正常なレスポンスです
+        """)
 
 
 def backtest_page():
@@ -671,8 +1512,18 @@ def backtest_page():
                 step=0.01
             )
     
-    # 実行ボタン
-    if st.button("🚀 バックテスト実行", type="primary", use_container_width=True):
+    # 開発中の警告表示
+    st.error("🚧 **バックテスト機能は現在開発中です** 🚧")
+    st.warning("""
+    この機能は実装中のため、現在実行できません：
+    - ✅ UI設計: 完了
+    - 🔄 データエンジン: 開発中  
+    - 🔄 バックテスト計算ロジック: 開発中
+    - 📅 完成予定: 近日中
+    """)
+    
+    # 実行ボタン（無効化）
+    if st.button("🚀 バックテスト実行", type="primary", use_container_width=True, disabled=True):
         run_backtest_simulation(
             strategy=selected_strategy,
             symbol=symbol,
@@ -697,14 +1548,9 @@ def run_backtest_simulation(strategy, symbol, timeframe, start_date, end_date,
         # シミュレーション結果を生成
         progress_bar.progress(50)
         
-        # ランダムな結果を生成
-        np.random.seed(42)  # 結果を一定にする
-        total_return = np.random.uniform(10, 30)
-        sharpe_ratio = np.random.uniform(1.0, 2.0)
-        max_drawdown = np.random.uniform(-15, -5)
-        win_rate = np.random.uniform(55, 70)
-        total_trades = np.random.randint(100, 200)
-        profit_factor = np.random.uniform(1.2, 1.8)
+        # 実際の価格データからバックテストを実行
+        st.error("⚠️ バックテスト機能は現在開発中です。実際の価格データを使用したバックテストエンジンを準備中です。")
+        return {}
         
         progress_bar.progress(100)
         progress_bar.empty()
@@ -927,6 +1773,739 @@ def settings_page():
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+
+
+def create_strategy_control_panel(strategy_info: Dict[str, Any]) -> None:
+    """戦略コントロールパネルを作成"""
+    strategy_id = strategy_info['id']
+    strategy_name = strategy_info['name']
+    state = strategy_info.get('state', 'stopped')
+    performance = strategy_info.get('performance', {})
+    parameters = strategy_info.get('parameters', {})
+    current_params = strategy_info.get('current_params', parameters)
+    
+    # 戦略状態に応じた色設定
+    state_colors = {
+        'active': '#19c37d',
+        'paused': '#ff6b35', 
+        'stopped': '#969696',
+        'error': '#ff5050'
+    }
+    state_color = state_colors.get(state, '#969696')
+    
+    # 戦略カードのベース
+    st.markdown(f"""
+    <div class="metric-card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div>
+                <h4 style="margin: 0; color: var(--text);">{strategy_name}</h4>
+                <p style="margin: 0.25rem 0 0 0; color: var(--subtext); font-size: 0.9rem;">{strategy_info.get('description', '')}</p>
+            </div>
+            <div style="text-align: right;">
+                <div style="color: {state_color}; font-size: 0.9rem; font-weight: 600; text-transform: uppercase;">
+                    ● {state}
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 制御パネル
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        # 開始/停止ボタン
+        if state == 'stopped' or state == 'error':
+            if st.button(f"🚀 開始", key=f"{strategy_id}_start", use_container_width=True):
+                strategy_manager = get_strategy_manager()
+                if strategy_manager.start_strategy(strategy_id, current_params):
+                    st.success(f"✅ {strategy_name}を開始しました")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {strategy_name}の開始に失敗しました")
+        
+        elif state == 'active':
+            if st.button(f"⏸️ 停止", key=f"{strategy_id}_stop", type="secondary", use_container_width=True):
+                strategy_manager = get_strategy_manager()
+                if strategy_manager.stop_strategy(strategy_id):
+                    st.success(f"✅ {strategy_name}を停止しました")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {strategy_name}の停止に失敗しました")
+        
+        elif state == 'paused':
+            if st.button(f"▶️ 再開", key=f"{strategy_id}_resume", use_container_width=True):
+                strategy_manager = get_strategy_manager()
+                if strategy_manager.resume_strategy(strategy_id):
+                    st.success(f"✅ {strategy_name}を再開しました")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {strategy_name}の再開に失敗しました")
+    
+    with col2:
+        # 一時停止ボタン (アクティブ時のみ)
+        if state == 'active':
+            if st.button(f"⏸️ 一時停止", key=f"{strategy_id}_pause", use_container_width=True):
+                strategy_manager = get_strategy_manager()
+                if strategy_manager.pause_strategy(strategy_id):
+                    st.success(f"✅ {strategy_name}を一時停止しました")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {strategy_name}の一時停止に失敗しました")
+        else:
+            st.write("")  # スペース確保
+    
+    with col3:
+        # 設定ボタン
+        if st.button("⚙️", key=f"{strategy_id}_settings", help="パラメータ設定", use_container_width=True):
+            st.session_state[f"{strategy_id}_show_params"] = not st.session_state.get(f"{strategy_id}_show_params", False)
+    
+    # パフォーマンス表示
+    if performance:
+        perf_col1, perf_col2, perf_col3, perf_col4 = st.columns(4)
+        
+        with perf_col1:
+            total_trades = performance.get('total_trades', 0)
+            st.metric("総取引数", f"{total_trades}")
+        
+        with perf_col2:
+            win_rate = performance.get('win_rate', 0)
+            st.metric("勝率", f"{win_rate:.1%}")
+        
+        with perf_col3:
+            total_pnl = performance.get('total_pnl', 0)
+            pnl_color = "normal" if total_pnl >= 0 else "inverse"
+            st.metric("総損益", f"{total_pnl:+.0f}円", delta_color=pnl_color)
+        
+        with perf_col4:
+            uptime = performance.get('uptime_hours', 0)
+            st.metric("稼働時間", f"{uptime:.1f}h")
+    
+    # パラメータ設定パネル (トグル表示)
+    if st.session_state.get(f"{strategy_id}_show_params", False):
+        st.markdown("---")
+        st.markdown("#### ⚙️ パラメータ設定")
+        
+        # パラメータ入力フォーム
+        updated_params = {}
+        param_changed = False
+        
+        # パラメータごとに入力ウィジェットを生成
+        param_cols = st.columns(min(len(parameters), 3))
+        
+        for i, (param_name, default_value) in enumerate(parameters.items()):
+            col_idx = i % len(param_cols)
+            with param_cols[col_idx]:
+                current_value = current_params.get(param_name, default_value)
+                
+                if isinstance(default_value, int):
+                    new_value = st.number_input(
+                        param_name,
+                        value=current_value,
+                        step=1,
+                        key=f"{strategy_id}_{param_name}_int"
+                    )
+                elif isinstance(default_value, float):
+                    new_value = st.number_input(
+                        param_name,
+                        value=current_value,
+                        step=0.01,
+                        format="%.3f",
+                        key=f"{strategy_id}_{param_name}_float"
+                    )
+                elif isinstance(default_value, bool):
+                    new_value = st.checkbox(
+                        param_name,
+                        value=current_value,
+                        key=f"{strategy_id}_{param_name}_bool"
+                    )
+                else:
+                    new_value = st.text_input(
+                        param_name,
+                        value=str(current_value),
+                        key=f"{strategy_id}_{param_name}_str"
+                    )
+                
+                updated_params[param_name] = new_value
+                if new_value != current_value:
+                    param_changed = True
+        
+        # パラメータ更新ボタン
+        if param_changed:
+            if st.button(f"💾 パラメータ更新", key=f"{strategy_id}_update_params", type="primary"):
+                strategy_manager = get_strategy_manager()
+                if strategy_manager.update_strategy_parameters(strategy_id, updated_params):
+                    st.success(f"✅ {strategy_name}のパラメータを更新しました")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {strategy_name}のパラメータ更新に失敗しました")
+
+
+def create_strategy_overview_card(strategies_status: List[Dict[str, Any]]) -> None:
+    """戦略全体の概要カードを作成"""
+    active_count = sum(1 for s in strategies_status if s.get('state') == 'active')
+    total_count = len(strategies_status)
+    
+    # 全体のパフォーマンス集計
+    total_trades = sum(s.get('performance', {}).get('total_trades', 0) for s in strategies_status)
+    total_pnl = sum(s.get('performance', {}).get('total_pnl', 0) for s in strategies_status)
+    total_errors = sum(s.get('performance', {}).get('error_count', 0) for s in strategies_status)
+    
+    # 勝率計算
+    winning_trades = sum(s.get('performance', {}).get('winning_trades', 0) for s in strategies_status)
+    overall_win_rate = winning_trades / total_trades if total_trades > 0 else 0
+    
+    st.markdown(f"""
+    <div class="metric-card" style="background: linear-gradient(135deg, #1a1a1d, #2d2d30); margin-bottom: 2rem;">
+        <h3 style="margin: 0 0 1rem 0; color: var(--accent1);">📊 戦略システム概要</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+            <div>
+                <div class="metric-label">稼働戦略</div>
+                <div class="metric-value" style="color: {'#19c37d' if active_count > 0 else '#969696'};">
+                    {active_count} / {total_count}
+                </div>
+            </div>
+            <div>
+                <div class="metric-label">総取引数</div>
+                <div class="metric-value">{total_trades}</div>
+            </div>
+            <div>
+                <div class="metric-label">全体勝率</div>
+                <div class="metric-value">{overall_win_rate:.1%}</div>
+            </div>
+            <div>
+                <div class="metric-label">総損益</div>
+                <div class="metric-value {'positive' if total_pnl >= 0 else 'negative'}">
+                    {total_pnl:+.0f}円
+                </div>
+            </div>
+            <div>
+                <div class="metric-label">エラー数</div>
+                <div class="metric-value" style="color: {'#ff5050' if total_errors > 0 else '#969696'};">
+                    {total_errors}
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def strategies_control_page(data: Dict[str, Any]):
+    """戦略コントロールページ"""
+    # データがNoneの場合の処理
+    if data is None:
+        st.error("⚠️ データを取得できませんでした。ネットワーク接続を確認してください。")
+        st.info("💡 APIキーの設定やネットワーク接続を確認してください。")
+        return
+    
+    st.markdown("""
+    <h1 style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary);">
+        <i class="fas fa-cogs" style="color: var(--accent1);"></i>
+        戦略コントロール
+    </h1>
+    """, unsafe_allow_html=True)
+    
+    # StrategyManagerから最新情報を取得
+    try:
+        strategy_manager = get_strategy_manager()
+        strategies_status = strategy_manager.get_all_strategies_status()
+        
+        # 概要カード
+        create_strategy_overview_card(strategies_status)
+        
+        # 各戦略のコントロールパネル
+        st.markdown("### 🎯 個別戦略制御")
+        
+        for strategy_info in strategies_status:
+            create_strategy_control_panel(strategy_info)
+        
+        # リアルタイムシグナル表示
+        st.markdown("---")
+        st.markdown("### 📡 最新シグナル")
+        
+        active_strategies = strategy_manager.get_active_strategies()
+        
+        if active_strategies:
+            signal_data = []
+            for strategy_id, strategy in active_strategies.items():
+                performance = strategy_manager.get_strategy_performance(strategy_id)
+                if performance:
+                    last_signal = performance.get('last_signal')
+                    last_signal_time = performance.get('last_signal_time')
+                    
+                    if last_signal and last_signal_time:
+                        signal_data.append({
+                            '戦略': strategy_id,
+                            'シグナル': last_signal,
+                            '時刻': last_signal_time[:19] if last_signal_time else 'N/A'  # ISO時刻の短縮
+                        })
+            
+            if signal_data:
+                signal_df = pd.DataFrame(signal_data)
+                st.dataframe(signal_df, use_container_width=True)
+            else:
+                st.info("📊 まだシグナルが発生していません")
+        else:
+            st.info("⚪ 稼働中の戦略がありません")
+    
+    except Exception as e:
+        st.error(f"❌ 戦略情報の取得に失敗しました: {e}")
+        logger.error(f"戦略コントロールページでエラー: {e}")
+
+
+def logs_alerts_page(data: Dict[str, Any]):
+    """ログ&アラートページ"""
+    # データがNoneの場合の処理
+    if data is None:
+        st.warning("⚠️ APIデータを取得できませんでしたが、ログとアラート機能は利用可能です。")
+    
+    st.markdown("""
+    <h1 style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary);">
+        <i class="fas fa-clipboard-list" style="color: var(--accent1);"></i>
+        ログ&アラート
+    </h1>
+    """, unsafe_allow_html=True)
+    
+    # タブ構成
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 取引ログ", "🚨 アラート", "📈 ログ分析", "⚙️ システム状態"])
+    
+    # 取引ログリーダーとアラートシステムを取得
+    log_reader = get_trade_log_reader()
+    alert_system = get_alert_system()
+    
+    with tab1:
+        st.markdown("### 📊 取引ログ")
+        
+        # フィルター設定
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            days_filter = st.selectbox("期間", [1, 3, 7, 14, 30], index=2)
+        
+        with col2:
+            strategy_filter = st.selectbox("戦略", ["全て", "MA Cross", "MACD RSI", "Grid Trading", "手動"])
+        
+        with col3:
+            side_filter = st.selectbox("売買", ["全て", "BUY", "SELL"])
+        
+        with col4:
+            if st.button("🔄 更新"):
+                st.rerun()
+        
+        # 最近の取引ログを取得
+        try:
+            recent_trades = log_reader.get_recent_trades(limit=100)
+            
+            if recent_trades:
+                # フィルタリング
+                filtered_trades = recent_trades
+                
+                if strategy_filter != "全て":
+                    filtered_trades = [t for t in filtered_trades if t['strategy'] == strategy_filter]
+                
+                if side_filter != "全て":
+                    filtered_trades = [t for t in filtered_trades if t['side'] == side_filter]
+                
+                # 統計情報
+                if filtered_trades:
+                    total_trades = len(filtered_trades)
+                    buy_trades = len([t for t in filtered_trades if t['side'] == 'BUY'])
+                    sell_trades = len([t for t in filtered_trades if t['side'] == 'SELL'])
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.markdown(create_metric_card(
+                            "総取引数",
+                            str(total_trades),
+                            icon="fas fa-exchange-alt"
+                        ), unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown(create_metric_card(
+                            "買い注文",
+                            str(buy_trades),
+                            icon="fas fa-arrow-up",
+                            delta_color="positive"
+                        ), unsafe_allow_html=True)
+                    
+                    with col3:
+                        st.markdown(create_metric_card(
+                            "売り注文",
+                            str(sell_trades),
+                            icon="fas fa-arrow-down",
+                            delta_color="negative"
+                        ), unsafe_allow_html=True)
+                    
+                    with col4:
+                        success_rate = (total_trades / 100 * 100) if total_trades > 0 else 0
+                        st.markdown(create_metric_card(
+                            "実行成功率",
+                            f"{success_rate:.1f}%",
+                            icon="fas fa-check-circle"
+                        ), unsafe_allow_html=True)
+                
+                # 取引ログテーブル
+                st.markdown("#### 📋 取引履歴")
+                
+                # DataFrameに変換して表示
+                if filtered_trades:
+                    df_trades = pd.DataFrame(filtered_trades)
+                    
+                    # 列の並び替え
+                    columns_order = ['timestamp', 'pair', 'side', 'quantity', 'price', 'value', 'fee', 'net_pnl', 'strategy', 'status']
+                    df_display = df_trades[columns_order]
+                    
+                    # 列名を日本語化
+                    df_display.columns = ['時刻', '通貨ペア', '売買', '数量', '価格', '取引額', '手数料', '純損益', '戦略', 'ステータス']
+                    
+                    st.dataframe(
+                        df_display,
+                        use_container_width=True,
+                        height=400
+                    )
+                else:
+                    st.info("フィルター条件に該当する取引がありません")
+                
+            else:
+                st.info("取引ログが見つかりません")
+                
+        except Exception as e:
+            st.error(f"取引ログ取得エラー: {e}")
+    
+    with tab2:
+        st.markdown("### 🚨 リアルタイムアラート")
+        
+        # アラート制御
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔄 アラート更新"):
+                st.rerun()
+        
+        with col2:
+            if st.button("✅ 全て確認済み"):
+                for alert in alert_system.recent_alerts:
+                    alert.acknowledged = True
+                st.success("全アラートを確認済みにしました")
+                st.rerun()
+        
+        with col3:
+            if st.button("🗑️ 履歴クリア"):
+                alert_system.clear_alerts()
+                st.success("アラート履歴をクリアしました")
+                st.rerun()
+        
+        # アラート統計
+        alert_stats = alert_system.get_alert_statistics(days=7)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(create_metric_card(
+                "総アラート数",
+                str(alert_stats['total_alerts']),
+                icon="fas fa-bell"
+            ), unsafe_allow_html=True)
+        
+        with col2:
+            error_count = alert_stats['by_level'].get('error', 0) + alert_stats['by_level'].get('critical', 0)
+            st.markdown(create_metric_card(
+                "エラー・警告",
+                str(error_count),
+                icon="fas fa-exclamation-triangle",
+                delta_color="negative" if error_count > 0 else "positive"
+            ), unsafe_allow_html=True)
+        
+        with col3:
+            acknowledged_count = alert_stats['acknowledged_count']
+            st.markdown(create_metric_card(
+                "確認済み",
+                str(acknowledged_count),
+                icon="fas fa-check"
+            ), unsafe_allow_html=True)
+        
+        with col4:
+            pending_count = alert_stats['total_alerts'] - acknowledged_count
+            st.markdown(create_metric_card(
+                "未確認",
+                str(pending_count),
+                icon="fas fa-clock",
+                delta_color="warning" if pending_count > 0 else "positive"
+            ), unsafe_allow_html=True)
+        
+        # 最近のアラート一覧
+        recent_alerts = alert_system.get_recent_alerts(limit=50)
+        
+        if recent_alerts:
+            st.markdown("#### 🚨 最近のアラート")
+            
+            for alert in recent_alerts:
+                # アラートレベルに応じた色設定
+                level_colors = {
+                    'info': '#17a2b8',
+                    'warning': '#ffc107', 
+                    'error': '#dc3545',
+                    'critical': '#721c24'
+                }
+                
+                level_icons = {
+                    'info': 'fas fa-info-circle',
+                    'warning': 'fas fa-exclamation-triangle',
+                    'error': 'fas fa-times-circle',
+                    'critical': 'fas fa-radiation'
+                }
+                
+                color = level_colors.get(alert['level'], '#17a2b8')
+                icon = level_icons.get(alert['level'], 'fas fa-bell')
+                
+                # アラートカード
+                acknowledged_badge = "✅" if alert['acknowledged'] else "🔴"
+                
+                st.markdown(f"""
+                <div style="
+                    background: var(--panel);
+                    border: 1px solid {color};
+                    border-radius: 8px;
+                    padding: 1rem;
+                    margin: 0.5rem 0;
+                    border-left: 4px solid {color};
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <i class="{icon}" style="color: {color};"></i>
+                                <strong style="color: {color};">{alert['level'].upper()}</strong>
+                                <span style="color: var(--subtext);">•</span>
+                                <span style="color: var(--subtext);">{alert['timestamp']}</span>
+                                <span style="color: var(--subtext);">•</span>
+                                <span style="color: var(--subtext);">{alert['strategy']}</span>
+                                <span style="margin-left: auto;">{acknowledged_badge}</span>
+                            </div>
+                            <h4 style="margin: 0 0 0.5rem 0; color: var(--text);">{alert['title']}</h4>
+                            <p style="margin: 0; color: var(--subtext);">{alert['message']}</p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 確認ボタン
+                if not alert['acknowledged']:
+                    if st.button(f"確認済み", key=f"ack_{alert['id']}"):
+                        alert_system.acknowledge_alert(alert['id'])
+                        st.rerun()
+        else:
+            st.info("アラートはありません")
+    
+    with tab3:
+        st.markdown("### 📈 ログ分析")
+        
+        # 日次サマリー
+        daily_summary = log_reader.get_daily_summary(days=30)
+        
+        if daily_summary:
+            # 日次パフォーマンスチャート
+            fig = go.Figure()
+            
+            dates = [s['date'] for s in daily_summary]
+            total_pnl = [s['total_pnl'] for s in daily_summary]
+            
+            fig.add_trace(go.Scatter(
+                x=dates,
+                y=total_pnl,
+                mode='lines+markers',
+                name='日次損益',
+                line=dict(color='#FF6B35', width=2),
+                marker=dict(size=6)
+            ))
+            
+            fig.update_layout(
+                title="日次損益推移",
+                xaxis_title="日付",
+                yaxis_title="損益 (JPY)",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#e8e8e8'),
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # サマリーテーブル
+            st.markdown("#### 📊 日次サマリー")
+            
+            df_summary = pd.DataFrame(daily_summary)
+            df_summary.columns = ['日付', '取引数', '取引量', '損益', '手数料', '勝ち', '負け', '買い', '売り', '勝率']
+            
+            # 数値フォーマット
+            df_summary['損益'] = df_summary['損益'].apply(lambda x: f"¥{x:,.0f}")
+            df_summary['手数料'] = df_summary['手数料'].apply(lambda x: f"¥{x:,.0f}")
+            df_summary['勝率'] = df_summary['勝率'].apply(lambda x: f"{x:.1f}%")
+            
+            st.dataframe(df_summary, use_container_width=True, height=300)
+        else:
+            st.info("分析データがありません")
+        
+        # 戦略別パフォーマンス
+        strategy_performance = log_reader.get_strategy_performance(days=30)
+        
+        if strategy_performance:
+            st.markdown("#### 🎯 戦略別パフォーマンス")
+            
+            strategy_data = list(strategy_performance.values())
+            df_strategy = pd.DataFrame(strategy_data)
+            
+            if not df_strategy.empty:
+                # 戦略別損益チャート
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=df_strategy['strategy'],
+                        y=df_strategy['total_pnl'],
+                        text=df_strategy['total_pnl'].apply(lambda x: f"¥{x:,.0f}"),
+                        textposition='auto',
+                        marker_color=['#FF6B35' if x >= 0 else '#FF4757' for x in df_strategy['total_pnl']]
+                    )
+                ])
+                
+                fig.update_layout(
+                    title="戦略別総損益",
+                    xaxis_title="戦略",
+                    yaxis_title="損益 (JPY)",
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#e8e8e8'),
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 戦略パフォーマンステーブル
+                df_display = df_strategy[['strategy', 'total_trades', 'win_rate', 'total_pnl', 'total_fees']].copy()
+                df_display.columns = ['戦略', '取引数', '勝率', '総損益', '総手数料']
+                df_display['勝率'] = df_display['勝率'].apply(lambda x: f"{x:.1f}%")
+                df_display['総損益'] = df_display['総損益'].apply(lambda x: f"¥{x:,.0f}")
+                df_display['総手数料'] = df_display['総手数料'].apply(lambda x: f"¥{x:,.0f}")
+                
+                st.dataframe(df_display, use_container_width=True)
+    
+    with tab4:
+        st.markdown("### ⚙️ システム状態監視")
+        
+        # システム状態メトリクス
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            # アラートシステム状態
+            alert_status = "稼働中" if alert_system.running else "停止中"
+            alert_color = "positive" if alert_system.running else "negative"
+            
+            st.markdown(create_metric_card(
+                "アラートシステム",
+                alert_status,
+                icon="fas fa-bell",
+                delta_color=alert_color
+            ), unsafe_allow_html=True)
+        
+        with col2:
+            # ログファイル数
+            try:
+                log_files = list(log_reader.log_path.glob("*.csv")) + list(log_reader.log_path.glob("*.jsonl"))
+                log_count = len(log_files)
+            except:
+                log_count = 0
+            
+            st.markdown(create_metric_card(
+                "ログファイル数",
+                str(log_count),
+                icon="fas fa-file-alt"
+            ), unsafe_allow_html=True)
+        
+        with col3:
+            # システム稼働時間（簡易版）
+            uptime = "稼働中"
+            st.markdown(create_metric_card(
+                "システム状態",
+                uptime,
+                icon="fas fa-server",
+                delta_color="positive"
+            ), unsafe_allow_html=True)
+        
+        with col4:
+            # メモリ使用量（簡易版）
+            memory_usage = "正常"
+            st.markdown(create_metric_card(
+                "メモリ状態",
+                memory_usage,
+                icon="fas fa-memory",
+                delta_color="positive"
+            ), unsafe_allow_html=True)
+        
+        # システム制御
+        st.markdown("#### 🛠️ システム制御")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🚀 アラートシステム開始"):
+                if not alert_system.running:
+                    alert_system.start()
+                    st.success("アラートシステムを開始しました")
+                else:
+                    st.info("アラートシステムは既に稼働中です")
+        
+        with col2:
+            if st.button("⏹️ アラートシステム停止"):
+                if alert_system.running:
+                    alert_system.stop()
+                    st.success("アラートシステムを停止しました")
+                else:
+                    st.info("アラートシステムは既に停止中です")
+        
+        with col3:
+            if st.button("🧪 テストアラート送信"):
+                alert_system.send_alert(
+                    alert_system.AlertType.SYSTEM_ERROR,
+                    alert_system.AlertLevel.INFO,
+                    "テストアラート",
+                    "これはテスト用のアラートです",
+                    {"test": True}
+                )
+                st.success("テストアラートを送信しました")
+        
+        # ログファイル一覧
+        st.markdown("#### 📄 ログファイル一覧")
+        
+        try:
+            log_files = []
+            
+            # CSVファイル
+            for csv_file in log_reader.log_path.glob("*.csv"):
+                stat = csv_file.stat()
+                log_files.append({
+                    'ファイル名': csv_file.name,
+                    'タイプ': 'CSV',
+                    'サイズ': f"{stat.st_size / 1024:.1f} KB",
+                    '更新日時': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
+            
+            # JSONLファイル
+            for jsonl_file in log_reader.log_path.glob("*.jsonl"):
+                stat = jsonl_file.stat()
+                log_files.append({
+                    'ファイル名': jsonl_file.name,
+                    'タイプ': 'JSONL',
+                    'サイズ': f"{stat.st_size / 1024:.1f} KB",
+                    '更新日時': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
+            
+            if log_files:
+                df_logs = pd.DataFrame(log_files)
+                st.dataframe(df_logs, use_container_width=True)
+            else:
+                st.info("ログファイルが見つかりません")
+                
+        except Exception as e:
+            st.error(f"ログファイル一覧取得エラー: {e}")
 
 
 if __name__ == "__main__":

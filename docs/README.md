@@ -185,7 +185,7 @@ download_data_all.bat
 
 ### 新しい戦略の追加
 
-詳細は [STRATEGY_DEVELOPMENT.md](STRATEGY_DEVELOPMENT.md) を参照してください。
+詳細は [STRATEGY_DEVELOPMENT.md](../_archive/STRATEGY_DEVELOPMENT.md) を参照してください。
 
 ```python
 # 1. テンプレートをコピー

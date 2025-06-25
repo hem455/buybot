@@ -140,7 +140,7 @@ strategies:
         prediction_threshold: 0.6
         min_data_points: 100
         retrain_interval: 1000
-        feature_set: 'basic'
+        feature_set: "basic"
 
 # リスク管理設定
 risk_management:
@@ -253,6 +253,7 @@ notifications:
     smtp_port: 587
     from_address: ""  # .envファイルで設定
     to_addresses: []  # .envファイルで設定
+    # パスワード設定: 環境変数 GMAIL_APP_PASSWORD で設定してください
     
   # 通知トリガー
   triggers:
