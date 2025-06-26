@@ -1,5 +1,5 @@
 """
-Streamlit UI メインアプリケーション - 本番環境版
+Streamlit UI メインアプリケーション - 本番環境版（リファクタリング版）
 
 GMOコイン自動売買システムのWebインターフェース（実データ表示）
 """
@@ -46,7 +46,7 @@ def apply_custom_css():
     /* Font Awesome CDN */
     @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
     
-    /* === ベースカラー === */
+    /* === カラーパレット === */
     :root{
         --bg:      #0b0b0d;
         --panel:   #151619;
@@ -55,6 +55,9 @@ def apply_custom_css():
         --subtext: #969696;
         --accent1: #ff6b35;
         --accent2: #ff5e14;
+        --success: #19c37d;
+        --danger:  #ff5050;
+        --warning: #ffa726;
     }
     
     html,body,.stApp{
@@ -121,8 +124,9 @@ def apply_custom_css():
         font-weight:600;
         color:var(--text);
     }
-    .positive{color:#19c37d;} 
-    .negative{color:#ff5050;}
+    .positive{color:var(--success);} 
+    .negative{color:var(--danger);}
+    .warning{color:var(--warning);}
 
     /* === ボタン === */
     .stButton>button{
@@ -311,16 +315,26 @@ if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = 30  # 秒
 
 
+# === ユーティリティ関数 ===
 def format_jpy(value: float) -> str:
     """日本円フォーマット"""
     return f"¥{value:,.0f}"
-
 
 def format_percentage(value: float, decimals: int = 2) -> str:
     """パーセンテージフォーマット"""
     return f"{value:.{decimals}f}%"
 
+def get_status_color(value: float, threshold_good: float = 0, threshold_warning: float = None) -> str:
+    """値に基づいてステータス色を取得"""
+    if threshold_warning and value < threshold_warning:
+        return "negative"
+    elif value >= threshold_good:
+        return "positive"
+    else:
+        return "warning"
 
+
+# === 共通UIコンポーネント ===
 def create_metric_card(label: str, value: str, delta: str = None, delta_color: str = "normal", icon: str = ""):
     """メトリクスカードを作成（強化版）"""
     delta_html = ""
@@ -355,6 +369,31 @@ def create_strategy_toggle(strategy_name: str, strategy_key: str, description: s
     
     return enabled
 
+def create_section_header(title: str, icon: str = "", description: str = ""):
+    """セクションヘッダーを作成"""
+    icon_html = f'<i class="fas fa-{icon}"></i>' if icon else ''
+    desc_html = f'<p style="color: var(--subtext); margin: 0.5rem 0 0 0; font-size: 1rem;">{description}</p>' if description else ''
+    
+    st.markdown(f"""
+    <div style='text-align: center; padding: 2rem 0; border-bottom: 1px solid var(--border); margin-bottom: 2rem;'>
+        <h1 style='color: var(--accent1); margin: 0; font-size: 2.2rem;'>
+            {icon_html} {title}
+        </h1>
+        {desc_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_error_message(message: str):
+    """エラーメッセージを表示"""
+    st.error(f"⚠️ {message}")
+
+def show_success_message(message: str):
+    """成功メッセージを表示"""
+    st.success(f"✅ {message}")
+
+def show_warning_message(message: str):
+    """警告メッセージを表示"""
+    st.warning(f"⚠️ {message}")
 
 @st.cache_data(ttl=10, persist=False)  # 10秒間キャッシュ、メモリのみ使用
 def fetch_cached_data(api_key_hash: str):
@@ -406,6 +445,9 @@ def fetch_cached_data(api_key_hash: str):
         active_orders = gmo_client.get_active_orders()
         liquidation_info = gmo_client.calculate_liquidation_price()
         
+        # リスクメトリクス取得
+        risk_metrics = gmo_client.get_risk_metrics_for_ui()
+        
         return {
             'balance': balance,
             'positions': positions,
@@ -417,7 +459,8 @@ def fetch_cached_data(api_key_hash: str):
             'balance_history': balance_history,
             'asset_history': asset_history,
             'active_orders': active_orders,
-            'liquidation_info': liquidation_info
+            'liquidation_info': liquidation_info,
+            'risk_metrics': risk_metrics
         }
     
     except Exception as e:
@@ -460,41 +503,57 @@ def fetch_real_data():
 
 def main():
     """メインアプリケーション"""
+    apply_custom_css()
+    
+    # サイドバーでページ選択
+    with st.sidebar:
+        st.markdown("""
+        <div style='text-align: center; padding: 1.5rem 0; border-bottom: 1px solid var(--border); margin-bottom: 1rem;'>
+            <h2 style='color: var(--accent1); margin: 0; font-size: 1.4rem;'>
+                <i class='fas fa-chart-line'></i> GMOコイン自動売買
+            </h2>
+            <p style='color: var(--subtext); margin: 0.5rem 0 0 0; font-size: 0.8rem;'>Production System</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        page = st.radio(
+            "ページ選択",
+            ["📊 ダッシュボード", "💼 ポジション & オーダー", "⚙️ 戦略コントロール", "📋 ログ & アラート", "🛡️ リスク管理", "🔙 バックテスト", "⚙️ 設定"],
+            index=0
+        )
+
+    # データ取得
     try:
-        # カスタムCSS適用
-        apply_custom_css()
-        
-        # データ取得
         data = fetch_real_data()
-        
-        # サイドバーでページ選択
-        with st.sidebar:
-            st.markdown("### 📊 ナビゲーション")
-            page = st.selectbox(
-                "ページ選択",
-                ["📈 ダッシュボード", "💼 ポジション&注文", "📋 取引履歴", "🎯 戦略コントロール", "📋 ログ&アラート", "🔄 バックテスト", "⚙️ 設定"],
-                index=0
-            )
-        
-        # ページルーティング
-        if page == "📈 ダッシュボード":
-            dashboard_page(data)
-        elif page == "💼 ポジション&注文":
-            positions_page(data)
-        elif page == "📋 取引履歴":
-            trades_page(data)
-        elif page == "🎯 戦略コントロール":
-            strategies_control_page(data)
-        elif page == "📋 ログ&アラート":
-            logs_alerts_page(data)
-        elif page == "🔄 バックテスト":
-            backtest_page()
-        elif page == "⚙️ 設定":
-            settings_page()
-            
+    except (ConnectionError, TimeoutError) as e:
+        st.error(f"ネットワークエラー: 接続に失敗しました - {str(e)}")
+        st.stop()
+    except ValueError as e:
+        st.error(f"設定エラー: APIキーやパラメータを確認してください - {str(e)}")
+        st.stop()
+    except KeyError as e:
+        st.error(f"データ形式エラー: 予期しないレスポンス形式です - {str(e)}")
+        st.stop()
     except Exception as e:
-        st.error(f"アプリケーションエラー: {e}")
-        logger.error(f"メインアプリケーションでエラー: {e}")
+        st.error(f"予期しないエラーが発生しました: {str(e)}")
+        st.error("システム管理者にお問い合わせください。")
+        st.stop()
+
+    # ページルーティング
+    if page == "📊 ダッシュボード":
+        dashboard_page(data)
+    elif page == "💼 ポジション & オーダー":
+        positions_page(data)
+    elif page == "⚙️ 戦略コントロール":
+        strategies_control_page(data)
+    elif page == "📋 ログ & アラート":
+        logs_alerts_page(data)
+    elif page == "🛡️ リスク管理":
+        risk_management_page(data)
+    elif page == "🔙 バックテスト":
+        backtest_page()
+    elif page == "⚙️ 設定":
+        settings_page()
 
 
 def dashboard_page(data: Dict[str, Any]):
@@ -1132,7 +1191,7 @@ def positions_page(data: Dict[str, Any]):
                     'unrealized_pnl': unrealized_pnl,
                     'liquidation_price': format_jpy(liquidation_price) if liquidation_price > 0 else '計算中...',
                     'margin_rate': f"{margin_rate:.1f}%" if margin_rate > 0 else '計算中...',
-                    'timestamp': pd.to_datetime(pos.get('timestamp')).strftime('%Y-%m-%d %H:%M:%S')
+                    'timestamp': pd.to_datetime(pos.get('timestamp')).strftime('%Y-%m-%d %H:%M:%S') if pos.get('timestamp') else 'N/A'
                 })
             
             if position_data:
@@ -2506,6 +2565,598 @@ def logs_alerts_page(data: Dict[str, Any]):
                 
         except Exception as e:
             st.error(f"ログファイル一覧取得エラー: {e}")
+
+
+def risk_management_page(data: Dict[str, Any]):
+    """リスク管理ページ（リファクタリング版）"""
+    create_section_header(
+        "リスク管理", 
+        "shield-alt", 
+        "ポジションサイズ・損切り・利確・ドローダウン制限の管理"
+    )
+
+    # リスク管理システムを初期化
+    try:
+        from backend.risk_manager import RiskManager
+        risk_manager = RiskManager()
+    except Exception as e:
+        show_error_message(f"リスク管理システムの初期化に失敗しました: {str(e)}")
+        return
+
+    # 現在の口座情報とポジション情報を取得
+    balance = data.get('balance', {})
+    positions = data.get('positions', [])
+    risk_metrics = data.get('risk_metrics', {})
+    
+    # account_info形式に変換
+    account_info = {
+        'total_balance': balance.get('total_jpy', 0),
+        'available_balance': balance.get('available_jpy', 0),
+        'margin_level': 1.0  # 現物取引なので100%
+    }
+    
+    # タブで機能を分割
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 リスク監視", "💰 ポジションサイズ", "⛔ 損切り・利確", "📉 ドローダウン制限", "🔢 取引限度"
+    ])
+
+    with tab1:
+        risk_monitoring_section(risk_manager, account_info, positions, data)
+    
+    with tab2:
+        position_sizing_section(risk_manager)
+    
+    with tab3:
+        stop_loss_take_profit_section(risk_manager)
+    
+    with tab4:
+        drawdown_limits_section(risk_manager, account_info)
+    
+    with tab5:
+        trading_limits_section(risk_manager)
+
+def risk_monitoring_section(risk_manager: 'RiskManager', account_info: Dict[str, Any], 
+                           positions: List[Dict[str, Any]], data: Dict[str, Any]):
+    """リスク監視セクション"""
+    st.markdown("### 📊 リアルタイムリスク監視")
+    
+    # 現在のリスク状況をチェック
+    can_trade, risk_reason = risk_manager.check_risk_limits(account_info, positions)
+    
+    # リスク状況の表示
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 取引可能状況
+        status_color = "🟢" if can_trade else "🔴"
+        status_text = "正常" if can_trade else "制限中"
+        
+        st.markdown(create_metric_card(
+            "🚦 取引状況", 
+            f"{status_color} {status_text}",
+            delta=risk_reason if not can_trade else "全ての制限をクリア",
+            delta_color="normal" if can_trade else "inverse",
+            icon="traffic-light"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        # 現在のポジション数
+        current_positions = len(positions)
+        max_positions = risk_manager.risk_config.get('max_open_positions', 3)
+        
+        st.markdown(create_metric_card(
+            "📊 ポジション数", 
+            f"{current_positions} / {max_positions}",
+            delta=f"{max_positions - current_positions} 残り" if current_positions < max_positions else "上限到達",
+            delta_color="normal" if current_positions < max_positions else "inverse",
+            icon="chart-bar"
+        ), unsafe_allow_html=True)
+
+    # ドローダウン監視
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # 最大ドローダウン
+        max_dd_limit = risk_manager.risk_config.get('max_drawdown_percentage', 0.20) * 100
+        current_dd = risk_manager.current_drawdown * 100
+        
+        st.markdown(create_metric_card(
+            "📉 現在DD", 
+            f"{current_dd:.2f}%",
+            delta=f"限界: {max_dd_limit:.1f}%",
+            delta_color="normal" if current_dd < max_dd_limit * 0.8 else "inverse",
+            icon="chart-line-down"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        # 日次取引数
+        daily_trades = risk_manager.daily_trades
+        max_daily = risk_manager.risk_config.get('max_daily_trades', 10)
+        
+        st.markdown(create_metric_card(
+            "🔢 今日の取引", 
+            f"{daily_trades} / {max_daily}",
+            delta=f"{max_daily - daily_trades} 残り",
+            delta_color="normal" if daily_trades < max_daily * 0.8 else "inverse",
+            icon="calculator"
+        ), unsafe_allow_html=True)
+    
+    with col3:
+        # 証拠金維持率
+        margin_level = account_info.get('margin_level', 1.0) * 100
+        margin_call = risk_manager.risk_config.get('margin_call_percentage', 0.05) * 100
+        
+        st.markdown(create_metric_card(
+            "💳 証拠金維持率", 
+            f"{margin_level:.1f}%",
+            delta=f"警告: {margin_call:.1f}%以下",
+            delta_color="normal" if margin_level > margin_call * 2 else "inverse",
+            icon="credit-card"
+        ), unsafe_allow_html=True)
+
+    # ポートフォリオメトリクス
+    st.markdown("### 📈 ポートフォリオメトリクス")
+    
+    metrics = risk_manager.calculate_portfolio_metrics()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(create_metric_card(
+            "🎯 勝率", 
+            f"{metrics['win_rate'] * 100:.1f}%",
+            icon="target"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(create_metric_card(
+            "💰 プロフィットファクター", 
+            f"{metrics['profit_factor']:.2f}",
+            icon="coins"
+        ), unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(create_metric_card(
+            "📊 シャープレシオ", 
+            f"{metrics['sharpe_ratio']:.2f}",
+            icon="chart-area"
+        ), unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(create_metric_card(
+            "🔢 総取引数", 
+            f"{metrics['total_trades']}",
+            icon="list-ol"
+        ), unsafe_allow_html=True)
+
+    # リスクアラート
+    if not can_trade:
+        st.error(f"⚠️ **取引制限中**: {risk_reason}")
+    
+    # ドローダウン警告
+    if current_dd > max_dd_limit * 0.8:
+        st.warning(f"⚠️ **ドローダウン警告**: 現在 {current_dd:.2f}% （限界: {max_dd_limit:.1f}%）")
+
+def position_sizing_section(risk_manager: 'RiskManager'):
+    """ポジションサイズ管理セクション"""
+    st.markdown("### 💰 ポジションサイズ管理")
+    
+    # 現在の設定を取得
+    sizing_config = risk_manager.risk_config.get('position_sizing', {})
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 📊 現在の設定")
+        
+        # ポジションサイジング方式
+        current_method = sizing_config.get('method', 'fixed_percentage')
+        method_names = {
+            'fixed_percentage': '固定パーセンテージ',
+            'kelly': 'ケリー基準',
+            'fixed_amount': '固定額'
+        }
+        
+        st.markdown(create_metric_card(
+            "⚙️ 計算方式", 
+            method_names.get(current_method, current_method),
+            icon="cog"
+        ), unsafe_allow_html=True)
+        
+        # リスク率
+        risk_per_trade = sizing_config.get('risk_per_trade', 0.02) * 100
+        st.markdown(create_metric_card(
+            "📊 リスク率", 
+            f"{risk_per_trade:.1f}%",
+            delta="1取引あたりの最大リスク",
+            icon="percentage"
+        ), unsafe_allow_html=True)
+        
+        # 最大ポジションサイズ
+        max_position = sizing_config.get('max_position_size', 0.1)
+        st.markdown(create_metric_card(
+            "📏 最大ポジション", 
+            f"{max_position:.4f} BTC",
+            icon="ruler"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("#### ⚙️ 設定変更")
+        
+        # ポジションサイジング方式の選択
+        new_method = st.selectbox(
+            "計算方式",
+            ['fixed_percentage', 'kelly', 'fixed_amount'],
+            format_func=lambda x: method_names.get(x, x),
+            index=['fixed_percentage', 'kelly', 'fixed_amount'].index(current_method)
+        )
+        
+        # リスク率の設定
+        new_risk_rate = st.slider(
+            "リスク率 (%)",
+            min_value=0.1,
+            max_value=10.0,
+            value=risk_per_trade,
+            step=0.1,
+            help="1取引あたりの最大リスク（総資産に対する割合）"
+        )
+        
+        # 最大ポジションサイズ
+        new_max_position = st.number_input(
+            "最大ポジションサイズ (BTC)",
+            min_value=0.0001,
+            max_value=10.0,
+            value=max_position,
+            step=0.0001,
+            format="%.4f"
+        )
+        
+        # 設定保存ボタン
+        if st.button("💾 ポジションサイズ設定を保存", key="save_position_sizing"):
+            try:
+                # 設定を更新
+                config_manager = get_config_manager()
+                config_manager.set('risk_management.position_sizing.method', new_method)
+                config_manager.set('risk_management.position_sizing.risk_per_trade', new_risk_rate / 100)
+                config_manager.set('risk_management.position_sizing.max_position_size', new_max_position)
+                
+                st.success("✅ ポジションサイズ設定を保存しました")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 設定保存に失敗しました: {str(e)}")
+
+def stop_loss_take_profit_section(risk_manager: 'RiskManager'):
+    """損切り・利確設定セクション"""
+    st.markdown("### ⛔ 損切り・利確設定")
+    
+    # 説明を追加
+    st.info("""
+    📌 **重要な用語説明**
+    - **損切り（ストップロス）** = 損失が拡大する前に自動で売却する機能（赤字を最小限に抑える）
+    - **利確（テイクプロフィット）** = 利益が出ている時に自動で売却する機能（利益を確定させる）
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 🛑 損切り設定（ストップロス）")
+        st.markdown("*⚠️ 損失を限定するための自動売却設定*")
+        
+        sl_config = risk_manager.risk_config.get('stop_loss', {})
+        
+        # ストップロス有効化
+        sl_enabled = st.checkbox(
+            "損切りを有効化（推奨: ON）",
+            value=sl_config.get('enabled', True),
+            help="損失が拡大する前に自動的にポジションを閉じます"
+        )
+        
+        if sl_enabled:
+            # 計算方式
+            sl_method = st.selectbox(
+                "損切り計算方式",
+                ['percentage', 'atr', 'fixed_amount'],
+                format_func=lambda x: {
+                    'percentage': '📊 パーセンテージ（%で指定）',
+                    'atr': '📈 ATR（ボラティリティ基準）',
+                    'fixed_amount': '💰 固定額（円で指定）'
+                }.get(x, x),
+                index=['percentage', 'atr', 'fixed_amount'].index(sl_config.get('method', 'percentage')),
+                key="sl_method"
+            )
+            
+            if sl_method == 'percentage':
+                sl_percentage = st.slider(
+                    "損切り率（エントリー価格からの下落%）",
+                    min_value=0.5,
+                    max_value=10.0,
+                    value=sl_config.get('percentage', 0.02) * 100,
+                    step=0.1,
+                    help="例：2%なら、100万円で買った場合98万円で自動売却",
+                    key="sl_percentage"
+                )
+                st.caption(f"💡 {sl_percentage}%下がったら自動損切り実行")
+            elif sl_method == 'atr':
+                sl_atr_multiplier = st.slider(
+                    "ATR倍率（価格変動幅の何倍で損切り）",
+                    min_value=1.0,
+                    max_value=5.0,
+                    value=sl_config.get('atr_multiplier', 2.0),
+                    step=0.1,
+                    help="ATR（価格変動幅）の倍率で損切り価格を決定",
+                    key="sl_atr"
+                )
+                st.caption(f"💡 価格変動幅の{sl_atr_multiplier}倍下がったら損切り")
+            else:  # fixed_amount
+                sl_fixed_amount = st.number_input(
+                    "固定損失額（この金額の損失で自動売却）",
+                    min_value=1000,
+                    max_value=1000000,
+                    value=sl_config.get('fixed_amount', 50000),
+                    step=1000,
+                    help="例：50,000円なら、5万円の損失で自動売却",
+                    key="sl_fixed"
+                )
+                st.caption(f"💡 {format_jpy(sl_fixed_amount)}の損失で自動損切り")
+    
+    with col2:
+        st.markdown("#### 🎯 利確設定（テイクプロフィット）")
+        st.markdown("*💰 利益を確定するための自動売却設定*")
+        
+        tp_config = risk_manager.risk_config.get('take_profit', {})
+        
+        # テイクプロフィット有効化
+        tp_enabled = st.checkbox(
+            "利確を有効化（推奨: ON）",
+            value=tp_config.get('enabled', True),
+            help="利益が出ている時に自動的にポジションを閉じて利益を確定します"
+        )
+        
+        if tp_enabled:
+            # 計算方式
+            tp_method = st.selectbox(
+                "利確計算方式",
+                ['risk_reward', 'percentage', 'fixed_amount'],
+                format_func=lambda x: {
+                    'risk_reward': '⚖️ リスクリワード比（損失の何倍で利確）',
+                    'percentage': '📊 パーセンテージ（%で指定）',
+                    'fixed_amount': '💰 固定額（円で指定）'
+                }.get(x, x),
+                index=['risk_reward', 'percentage', 'fixed_amount'].index(tp_config.get('method', 'risk_reward')),
+                key="tp_method"
+            )
+            
+            if tp_method == 'risk_reward':
+                tp_ratio = st.slider(
+                    "リスクリワード比（損失の何倍で利確するか）",
+                    min_value=1.0,
+                    max_value=5.0,
+                    value=tp_config.get('risk_reward_ratio', 2.0),
+                    step=0.1,
+                    help="例：2.0なら、損切り額の2倍の利益で自動売却",
+                    key="tp_ratio"
+                )
+                st.caption(f"💡 損失額の{tp_ratio}倍の利益で自動利確")
+            elif tp_method == 'percentage':
+                tp_percentage = st.slider(
+                    "利確率（エントリー価格からの上昇%）",
+                    min_value=1.0,
+                    max_value=20.0,
+                    value=tp_config.get('percentage', 0.04) * 100,
+                    step=0.1,
+                    help="例：4%なら、100万円で買った場合104万円で自動売却",
+                    key="tp_percentage"
+                )
+                st.caption(f"💡 {tp_percentage}%上がったら自動利確実行")
+            else:  # fixed_amount
+                tp_fixed_amount = st.number_input(
+                    "固定利益額（この金額の利益で自動売却）",
+                    min_value=1000,
+                    max_value=1000000,
+                    value=tp_config.get('fixed_amount', 100000),
+                    step=1000,
+                    help="例：100,000円なら、10万円の利益で自動売却",
+                    key="tp_fixed"
+                )
+                st.caption(f"💡 {format_jpy(tp_fixed_amount)}の利益で自動利確")
+
+    # 設定保存ボタン
+    if st.button("💾 損切り・利確設定を保存", key="save_sl_tp"):
+        try:
+            config_manager = get_config_manager()
+            
+            # ストップロス設定
+            config_manager.set('risk_management.stop_loss.enabled', sl_enabled)
+            if sl_enabled:
+                config_manager.set('risk_management.stop_loss.method', sl_method)
+                if sl_method == 'percentage':
+                    config_manager.set('risk_management.stop_loss.percentage', sl_percentage / 100)
+                elif sl_method == 'atr':
+                    config_manager.set('risk_management.stop_loss.atr_multiplier', sl_atr_multiplier)
+                else:
+                    config_manager.set('risk_management.stop_loss.fixed_amount', sl_fixed_amount)
+            
+            # テイクプロフィット設定
+            config_manager.set('risk_management.take_profit.enabled', tp_enabled)
+            if tp_enabled:
+                config_manager.set('risk_management.take_profit.method', tp_method)
+                if tp_method == 'risk_reward':
+                    config_manager.set('risk_management.take_profit.risk_reward_ratio', tp_ratio)
+                elif tp_method == 'percentage':
+                    config_manager.set('risk_management.take_profit.percentage', tp_percentage / 100)
+                else:
+                    config_manager.set('risk_management.take_profit.fixed_amount', tp_fixed_amount)
+            
+            st.success("✅ 損切り・利確設定を保存しました")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ 設定保存に失敗しました: {str(e)}")
+
+def drawdown_limits_section(risk_manager: 'RiskManager', account_info: Dict[str, Any]):
+    """ドローダウン制限セクション"""
+    st.markdown("### 📉 ドローダウン制限")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 📊 現在の状況")
+        
+        # 現在のドローダウン
+        current_dd = risk_manager.current_drawdown * 100
+        max_dd_limit = risk_manager.risk_config.get('max_drawdown_percentage', 0.20) * 100
+        
+        st.markdown(create_metric_card(
+            "📉 現在のDD", 
+            f"{current_dd:.2f}%",
+            delta=f"限界まで {max_dd_limit - current_dd:.2f}%",
+            delta_color="normal" if current_dd < max_dd_limit * 0.8 else "inverse",
+            icon="chart-line-down"
+        ), unsafe_allow_html=True)
+        
+        # ピーク残高
+        peak_balance = risk_manager.peak_balance
+        st.markdown(create_metric_card(
+            "🏔️ ピーク残高", 
+            format_jpy(peak_balance),
+            icon="mountain"
+        ), unsafe_allow_html=True)
+        
+        # 現在残高
+        current_balance = account_info.get('total_balance', 0)
+        st.markdown(create_metric_card(
+            "💰 現在残高", 
+            format_jpy(current_balance),
+            delta=f"{((current_balance / peak_balance - 1) * 100):+.2f}%" if peak_balance > 0 else "",
+            delta_color="normal" if current_balance >= peak_balance else "inverse",
+            icon="wallet"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("#### ⚙️ 制限設定")
+        
+        # 最大ドローダウン制限
+        new_max_dd = st.slider(
+            "最大ドローダウン制限 (%)",
+            min_value=5.0,
+            max_value=50.0,
+            value=max_dd_limit,
+            step=1.0,
+            help="この値を超えるとすべての取引が停止されます"
+        )
+        
+        # 証拠金維持率制限
+        margin_call_limit = risk_manager.risk_config.get('margin_call_percentage', 0.05) * 100
+        new_margin_call = st.slider(
+            "証拠金維持率制限 (%)",
+            min_value=1.0,
+            max_value=20.0,
+            value=margin_call_limit,
+            step=0.5,
+            help="この値以下になると取引が停止されます"
+        )
+        
+        # 緊急停止ボタン
+        st.markdown("#### 🚨 緊急制御")
+        
+        if st.button("🚨 すべての取引を緊急停止", key="emergency_stop"):
+            st.warning("⚠️ 緊急停止機能は実装予定です")
+        
+        # 設定保存
+        if st.button("💾 ドローダウン制限を保存", key="save_drawdown"):
+            try:
+                config_manager = get_config_manager()
+                config_manager.set('risk_management.max_drawdown_percentage', new_max_dd / 100)
+                config_manager.set('risk_management.margin_call_percentage', new_margin_call / 100)
+                
+                st.success("✅ ドローダウン制限を保存しました")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 設定保存に失敗しました: {str(e)}")
+
+def trading_limits_section(risk_manager: 'RiskManager'):
+    """取引限度設定セクション"""
+    st.markdown("### 🔢 取引限度設定")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 📊 現在の制限")
+        
+        # 最大ポジション数
+        max_positions = risk_manager.risk_config.get('max_open_positions', 3)
+        st.markdown(create_metric_card(
+            "📊 最大ポジション数", 
+            f"{max_positions}",
+            icon="chart-bar"
+        ), unsafe_allow_html=True)
+        
+        # 日次最大取引数
+        max_daily_trades = risk_manager.risk_config.get('max_daily_trades', 10)
+        st.markdown(create_metric_card(
+            "🔢 日次最大取引数", 
+            f"{max_daily_trades}",
+            icon="calculator"
+        ), unsafe_allow_html=True)
+        
+        # 今日の取引数
+        daily_trades = risk_manager.daily_trades
+        st.markdown(create_metric_card(
+            "📅 今日の取引数", 
+            f"{daily_trades} / {max_daily_trades}",
+            delta=f"{max_daily_trades - daily_trades} 残り",
+            delta_color="normal" if daily_trades < max_daily_trades else "inverse",
+            icon="calendar-day"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("#### ⚙️ 制限変更")
+        
+        # 最大ポジション数の設定
+        new_max_positions = st.slider(
+            "最大同時ポジション数",
+            min_value=1,
+            max_value=10,
+            value=max_positions,
+            step=1,
+            help="同時に保有できる最大ポジション数"
+        )
+        
+        # 日次最大取引数の設定
+        new_max_daily = st.slider(
+            "日次最大取引数",
+            min_value=1,
+            max_value=50,
+            value=max_daily_trades,
+            step=1,
+            help="1日に実行できる最大取引数"
+        )
+        
+        # 取引時間制限（将来実装）
+        st.markdown("#### ⏰ 取引時間制限（将来実装）")
+        
+        trading_start = st.time_input(
+            "取引開始時刻",
+            value=datetime.strptime("09:00", "%H:%M").time(),
+            disabled=True
+        )
+        
+        trading_end = st.time_input(
+            "取引終了時刻",
+            value=datetime.strptime("17:00", "%H:%M").time(),
+            disabled=True
+        )
+        
+        # 設定保存
+        if st.button("💾 取引限度を保存", key="save_trading_limits"):
+            try:
+                config_manager = get_config_manager()
+                config_manager.set('risk_management.max_open_positions', new_max_positions)
+                config_manager.set('risk_management.max_daily_trades', new_max_daily)
+                
+                st.success("✅ 取引限度設定を保存しました")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 設定保存に失敗しました: {str(e)}")
 
 
 if __name__ == "__main__":
