@@ -34,81 +34,25 @@ async def download_historical_data(symbol: str, interval: str, days: int = None)
     
     async with GMOCoinRESTFetcher() as fetcher:
         try:
-            # GMOコインAPIで過去データを取得
-            # GMOコインのklines APIは、指定日の全データを返す
-            # 複数日のデータを取得するには、日付を変えて複数回リクエストする必要がある
+            # REST API fetcher の fetch_ohlcv メソッドを直接使用
+            logger.info(f"GMOコインAPIからデータ取得中: {symbol} {interval}")
             
-            all_data = []
-            current_date = datetime.now()
+            # fetch_ohlcvメソッドを使用してデータを取得
+            df = await fetcher.fetch_ohlcv(symbol=symbol, interval=interval, limit=1000)
             
-            # 過去何日分のデータを取得するか
-            if days is None:
-                # 最大365日分を試みる
-                days = 365
-            
-            successful_days = 0
-            
-            for i in range(days):
-                # 日付を遡る
-                target_date = current_date - timedelta(days=i)
-                
-                # パラメータを設定
-                params = {
-                    'symbol': symbol,
-                    'interval': interval,
-                    'date': target_date.strftime('%Y%m%d')
-                }
-                
-                try:
-                    # データを取得
-                    logger.info(f"取得中: {target_date.strftime('%Y-%m-%d')}")
-                    data = await fetcher._request('GET', '/v1/klines', params)
-                    
-                    if data:
-                        # DataFrameに変換（GMOコインのレスポンス形式に合わせる）
-                        df_day = pd.DataFrame(data, columns=['openTime', 'open', 'high', 'low', 'close', 'volume'])
-                        # GMOコインのopenTimeはISO 8601文字列形式
-                        df_day['timestamp'] = pd.to_datetime(df_day['openTime'], utc=True)
-                        df_day['open'] = df_day['open'].astype(float)
-                        df_day['high'] = df_day['high'].astype(float)
-                        df_day['low'] = df_day['low'].astype(float)
-                        df_day['close'] = df_day['close'].astype(float)
-                        df_day['volume'] = df_day['volume'].astype(float)
-                        df_day = df_day.drop(columns=['openTime'])
-                        
-                        all_data.append(df_day)
-                        successful_days += 1
-                        
-                        # API制限を考慮
-                        await asyncio.sleep(0.2)
-                    
-                except Exception as e:
-                    # エラーが出た場合は継続
-                    logger.error(f"{target_date.strftime('%Y-%m-%d')}のデータ取得失敗: {e}")
-                    continue
-                
-                # 30日分取得したら一旦チェック
-                if successful_days > 0 and successful_days % 30 == 0:
-                    logger.info(f"{successful_days}日分のデータを取得済み")
-            
-            if all_data:
-                # データを結合
-                df = pd.concat(all_data, ignore_index=True)
-                df = df.sort_values('timestamp')
-                df = df.drop_duplicates(subset=['timestamp'])
-                
-                logger.info(f"取得したデータ数: {len(df)}件")
-                logger.info(f"期間: {df['timestamp'].min()} ～ {df['timestamp'].max()}")
-                
-                # データを保存
-                storage = DataStorage(config)
-                storage.save_ohlcv(symbol, interval, df)
-                
-                logger.info(f"データを保存しました: {symbol}_{interval}")
-                return True, len(df), df['timestamp'].min(), df['timestamp'].max()
-            else:
-                logger.error("データが取得できませんでした")
+            if df.empty:
+                logger.warning("取得したデータが空でした")
                 return False, 0, None, None
+            
+            logger.info(f"取得したデータ数: {len(df)}件")
+            logger.info(f"期間: {df['timestamp'].min()} ～ {df['timestamp'].max()}")
+            
+            # データを保存（DataStorageを直接使用）
+            storage = DataStorage(config)
+            storage.save_ohlcv(symbol, interval, df)
+            
+            logger.info(f"データを保存しました: {symbol}_{interval}")
+            return True, len(df), df['timestamp'].min(), df['timestamp'].max()
                 
         except Exception as e:
             logger.error(f"データ取得エラー: {e}")
@@ -167,9 +111,9 @@ def main():
     parser.add_argument(
         '--intervals',
         nargs='+',
-        default=['1hour'],
+        default=['15min', '1hour'],
         choices=['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour', '1day', '1week', '1month'],
-        help='時間間隔（複数指定可能） 例: 1hour 4hour 1day'
+        help='時間間隔（複数指定可能） 例: 15min 1hour 4hour 1day'
     )
     parser.add_argument(
         '--days',

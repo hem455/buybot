@@ -3610,6 +3610,18 @@ def run_backtest(strategy_id: str, symbol: str, timeframe: str, start_date, end_
         )
         st.success("✅ デモバックテストが完了しました！")
         
+    except FileNotFoundError as e:
+        st.error(f"❌ OHLCVデータが見つかりません: {e}")
+        st.warning("💡 以下を確認してください：")
+        st.markdown("""
+        1. **ファイル確認**: `data/ohlcv/{symbol}_{interval}.parquet`が存在するか
+        2. **時間足一致**: UIの時間足設定とファイル名が一致するか
+        3. **データダウンロード**: 以下のコマンドで実際のOHLCVデータをダウンロード
+        ```bash
+        python tools/download_data_fix.py --symbols {symbol} --intervals {timeframe} --days 180
+        ```
+        """.format(symbol=symbol, interval=timeframe, timeframe=timeframe))
+        
     except Exception as e:
         st.error(f"❌ バックテスト実行エラー: {e}")
         

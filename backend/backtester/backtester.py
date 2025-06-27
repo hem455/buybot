@@ -73,8 +73,9 @@ class Backtester:
         # データを読み込む
         df = self.data_storage.load_ohlcv(symbol, interval, start_date, end_date)
         if df.empty:
-            self.logger.error("ヒストリカルデータが見つかりません")
-            return self._generate_empty_result()
+            error_msg = f"OHLCVデータが読めずバックテストを中止しました（symbol={symbol}, interval={interval}）"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
         
         # 指標を計算（戦略パラメータを考慮）
         df = self.indicator_calculator.calculate_dynamic_indicators(df, parameters)

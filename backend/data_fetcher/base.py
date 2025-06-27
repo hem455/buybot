@@ -276,13 +276,12 @@ class DataStorage:
                 df = df.set_index('timestamp').sort_index()
             
             # 時刻でフィルタリング（インデックスベース）
+            # フィルタ前に "naive → UTC" を揃える（ユーザー指摘の修正）
             if start_time:
-                # start_timeがnaive datetimeの場合はUTCに変換
                 if start_time.tzinfo is None:
                     start_time = start_time.replace(tzinfo=timezone.utc)
                 df = df[df.index >= start_time]
             if end_time:
-                # end_timeがnaive datetimeの場合はUTCに変換
                 if end_time.tzinfo is None:
                     end_time = end_time.replace(tzinfo=timezone.utc)
                 df = df[df.index <= end_time]
