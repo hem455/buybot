@@ -76,8 +76,8 @@ class Backtester:
             self.logger.error("ヒストリカルデータが見つかりません")
             return self._generate_empty_result()
         
-        # 指標を計算
-        df = self.indicator_calculator.calculate_all(df)
+        # 指標を計算（戦略パラメータを考慮）
+        df = self.indicator_calculator.calculate_dynamic_indicators(df, parameters)
         
         # 戦略固有の指標を追加計算（simple_ma_crossの場合）
         if strategy_id == 'simple_ma_cross':

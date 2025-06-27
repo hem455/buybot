@@ -77,8 +77,10 @@ class IndicatorCalculator:
         for period in periods:
             column_name = f'sma_{period}'
             try:
-                df[column_name] = ta.sma(df['close'], length=period)
-                self.logger.debug(f"SMA({period})を計算しました")
+                # 既に計算済みの場合はスキップ
+                if column_name not in df.columns:
+                    df[column_name] = ta.sma(df['close'], length=period)
+                    self.logger.debug(f"SMA({period})を計算しました")
             except Exception as e:
                 self.logger.error(f"SMA({period})の計算に失敗しました: {e}")
         
@@ -354,3 +356,43 @@ class IndicatorCalculator:
             return False
         
         return True
+    
+    def calculate_dynamic_indicators(self, df: pd.DataFrame, strategy_params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """
+        戦略パラメータに基づいて動的に指標を計算する
+        
+        Args:
+            df: OHLCVデータフレーム
+            strategy_params: 戦略パラメータ（移動平均期間など）
+        
+        Returns:
+            指標が追加されたデータフレーム
+        """
+        result_df = df.copy()
+        
+        # 基本指標を計算
+        result_df = self.calculate_all(result_df)
+        
+        if strategy_params is None:
+            return result_df
+        
+        # 戦略パラメータから動的にSMAを追加
+        sma_periods = []
+        
+        # MA Cross戦略のパラメータ
+        if 'short_period' in strategy_params and 'long_period' in strategy_params:
+            sma_periods.extend([strategy_params['short_period'], strategy_params['long_period']])
+        
+        # その他の戦略パラメータから期間を抽出
+        for key, value in strategy_params.items():
+            if key.endswith('_period') and isinstance(value, int) and value > 0:
+                sma_periods.append(value)
+        
+        # 重複を除去
+        sma_periods = list(set(sma_periods))
+        
+        if sma_periods:
+            result_df = self.add_sma(result_df, sma_periods)
+            self.logger.debug(f"戦略パラメータに基づいてSMA期間を追加: {sma_periods}")
+        
+        return result_df

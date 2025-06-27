@@ -142,8 +142,21 @@ class LoggerManager:
             strategy: 戦略名
             details: 詳細情報
         """
+        # Signalオブジェクトなどを文字列に変換
+        def convert_to_serializable(obj):
+            if hasattr(obj, 'value'):
+                return obj.value
+            elif hasattr(obj, '__dict__'):
+                return str(obj)
+            return obj
+        
+        # 詳細情報をシリアライズ可能に変換
+        serializable_details = {}
+        for key, value in details.items():
+            serializable_details[key] = convert_to_serializable(value)
+        
         self.logger.info(
-            f"シグナル発生 | タイプ: {signal_type} | 戦略: {strategy} | 詳細: {json.dumps(details, ensure_ascii=False)}"
+            f"シグナル発生 | タイプ: {signal_type} | 戦略: {strategy} | 詳細: {json.dumps(serializable_details, ensure_ascii=False)}"
         )
     
     def log_order(self, action: str, order_data: Dict[str, Any]) -> None:

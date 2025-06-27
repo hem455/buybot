@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import numpy as np
 
 from ..config_manager import get_config_manager
 from ..logger import get_logger
@@ -138,6 +139,11 @@ class RiskManager:
                 stop_loss = entry_price + amount
         
         else:
+            return None
+        
+        # NaNチェック
+        if pd.isna(stop_loss) or not np.isfinite(stop_loss):
+            self.logger.warning(f"ストップロス価格が無効です（NaN）: ATR={atr}")
             return None
         
         # 価格を丸める
