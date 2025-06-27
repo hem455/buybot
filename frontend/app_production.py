@@ -1627,6 +1627,85 @@ def backtest_results_section():
     
     st.markdown("---")
     
+    # === Buy & Hold単体詳細結果 ===
+    st.markdown("**📊 Buy & Hold戦略詳細分析**")
+    
+    if buy_hold:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(create_metric_card(
+                "💰 Buy & Hold収益率",
+                f"{buy_hold_return:.2f}%",
+                delta=f"{'+' if buy_hold_return >= 0 else ''}{buy_hold_return:.2f}%",
+                delta_color="positive" if buy_hold_return >= 0 else "negative",
+                icon="📈" if buy_hold_return >= 0 else "📉"
+            ), unsafe_allow_html=True)
+        
+        with col2:
+            bh_final_value = buy_hold.get('final_value', summary.get('initial_capital', 1000000))
+            bh_initial = buy_hold.get('initial_capital', summary.get('initial_capital', 1000000))
+            bh_profit = bh_final_value - bh_initial
+            
+            st.markdown(create_metric_card(
+                "💵 Buy & Hold最終資産",
+                format_jpy(bh_final_value),
+                delta=f"{'+' if bh_profit >= 0 else ''}{format_jpy(bh_profit)}",
+                delta_color="positive" if bh_profit >= 0 else "negative",
+                icon="💎"
+            ), unsafe_allow_html=True)
+        
+        with col3:
+            bh_sharpe = buy_hold.get('sharpe_ratio', 0)
+            bh_sharpe_color = "positive" if bh_sharpe > 1.0 else "warning" if bh_sharpe > 0.5 else "negative"
+            
+            st.markdown(create_metric_card(
+                "⭐ Buy & Holdシャープレシオ",
+                f"{bh_sharpe:.2f}",
+                delta="優秀" if bh_sharpe > 1.0 else "良好" if bh_sharpe > 0.5 else "要改善",
+                delta_color=bh_sharpe_color,
+                icon="⭐"
+            ), unsafe_allow_html=True)
+        
+        with col4:
+            bh_dd = buy_hold.get('max_drawdown_pct', 0)
+            bh_dd_color = "positive" if bh_dd < 10 else "warning" if bh_dd < 20 else "negative"
+            
+            st.markdown(create_metric_card(
+                "📉 Buy & Hold最大DD",
+                f"{bh_dd:.1f}%",
+                delta="低リスク" if bh_dd < 10 else "中リスク" if bh_dd < 20 else "高リスク",
+                delta_color=bh_dd_color,
+                icon="🛡️"
+            ), unsafe_allow_html=True)
+        
+        # 勝敗判定を大きく表示
+        st.markdown("---")
+        winner_color = "#28a745" if outperforms else "#dc3545"
+        winner_text = "🏆 戦略の勝利！" if outperforms else "😞 Buy & Holdの勝利"
+        
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, {winner_color}20, {winner_color}10);
+            border: 2px solid {winner_color};
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+        ">
+            <h2 style="color: {winner_color}; margin: 0; font-size: 24px;">
+                {winner_text}
+            </h2>
+            <p style="color: var(--text-color); margin: 10px 0; font-size: 18px;">
+                差分: <strong style="color: {winner_color};">{'+'if outperforms else ''}{strategy_return - buy_hold_return:.2f}%</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("⚠️ Buy & Hold比較データがありません")
+    
+    st.markdown("---")
+    
     # === 資産曲線グラフ ===
     display_backtest_charts(result)
     
@@ -3615,6 +3694,10 @@ def backtest_results_section():
     
     result = st.session_state.backtest_result
     summary = result.get('summary', {})
+    
+    # デモモード検出と警告表示
+    if 'demo_mode' not in result and summary.get('total_trades', 0) == 0 and summary.get('total_return_pct', 0) < 0:
+        st.warning("⚠️ デモモードの可能性があります。実際のバックテスト結果と異なる場合があります。")
     
     # === サマリーメトリクス ===
     st.markdown("**📈 パフォーマンスサマリー**")
