@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 # プロジェクトルートをパスに追加
-sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from backend.config_manager import get_config_manager
 from backend.logger import get_logger
@@ -65,9 +65,10 @@ async def download_historical_data(symbol: str, interval: str, days: int = None)
                     data = await fetcher._request('GET', '/v1/klines', params)
                     
                     if data:
-                        # DataFrameに変換
+                        # DataFrameに変換（GMOコインのレスポンス形式に合わせる）
                         df_day = pd.DataFrame(data, columns=['openTime', 'open', 'high', 'low', 'close', 'volume'])
-                        df_day['timestamp'] = pd.to_datetime(df_day['openTime'].astype(int), unit='ms')
+                        # GMOコインのopenTimeはISO 8601文字列形式
+                        df_day['timestamp'] = pd.to_datetime(df_day['openTime'], utc=True)
                         df_day['open'] = df_day['open'].astype(float)
                         df_day['high'] = df_day['high'].astype(float)
                         df_day['low'] = df_day['low'].astype(float)
@@ -83,7 +84,7 @@ async def download_historical_data(symbol: str, interval: str, days: int = None)
                     
                 except Exception as e:
                     # エラーが出た場合は継続
-                    logger.debug(f"{target_date.strftime('%Y-%m-%d')}のデータ取得失敗: {e}")
+                    logger.error(f"{target_date.strftime('%Y-%m-%d')}のデータ取得失敗: {e}")
                     continue
                 
                 # 30日分取得したら一旦チェック
@@ -101,7 +102,7 @@ async def download_historical_data(symbol: str, interval: str, days: int = None)
                 
                 # データを保存
                 storage = DataStorage(config)
-                storage.save_ohlcv(df, symbol, interval)
+                storage.save_ohlcv(symbol, interval, df)
                 
                 logger.info(f"データを保存しました: {symbol}_{interval}")
                 return True, len(df), df['timestamp'].min(), df['timestamp'].max()

@@ -79,6 +79,13 @@ class Backtester:
         # 指標を計算
         df = self.indicator_calculator.calculate_all(df)
         
+        # 戦略固有の指標を追加計算（simple_ma_crossの場合）
+        if strategy_id == 'simple_ma_cross':
+            if parameters:
+                short_period = parameters.get('short_period', 5)
+                long_period = parameters.get('long_period', 20)
+                df = self.indicator_calculator.add_sma(df, [short_period, long_period])
+        
         # 戦略をロード
         strategy = self.strategy_manager.load_strategy(strategy_id, parameters)
         
@@ -89,7 +96,7 @@ class Backtester:
         # 各バーでシミュレーション
         for i in range(len(df)):
             current_bar = df.iloc[i]
-            current_time = current_bar['timestamp']
+            current_time = df.index[i]  # timestampはインデックスになっている
             current_price = current_bar['close']
             
             # 現在のデータフレーム（i+1までのデータ）
@@ -166,7 +173,7 @@ class Backtester:
             close_result = self._close_position(
                 position,
                 final_bar['close'],
-                final_bar['timestamp'],
+                df.index[-1],  # timestampはインデックスになっている
                 account_balance
             )
             

@@ -9,7 +9,7 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 
 from ..config_manager import get_config_manager
@@ -254,7 +254,7 @@ class DataStorage:
             end_time: 終了時刻
         
         Returns:
-            データフレーム
+            データフレーム（timestampがインデックス）
         """
         filename = f"{symbol.replace('/', '_')}_{interval}.parquet"
         filepath = f"{self.data_dir}/{filename}"
@@ -267,11 +267,25 @@ class DataStorage:
             # Parquet形式で読み込み
             df = pd.read_parquet(filepath)
             
-            # 時刻でフィルタリング
+            if df.empty:
+                return pd.DataFrame()
+            
+            # timestampをdatetime型に変換してインデックスに設定
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+                df = df.set_index('timestamp').sort_index()
+            
+            # 時刻でフィルタリング（インデックスベース）
             if start_time:
-                df = df[df['timestamp'] >= start_time]
+                # start_timeがnaive datetimeの場合はUTCに変換
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                df = df[df.index >= start_time]
             if end_time:
-                df = df[df['timestamp'] <= end_time]
+                # end_timeがnaive datetimeの場合はUTCに変換
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=timezone.utc)
+                df = df[df.index <= end_time]
             
             return df
             

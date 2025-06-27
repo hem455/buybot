@@ -1476,161 +1476,274 @@ def trades_page(data: Dict[str, Any]):
 
 
 def backtest_page():
-    """バックテストページ"""
-    st.markdown("### 🔄 バックテスト")
+    """⑥⑦バックテスト設定層・結果層"""
+    create_section_header("🔄 バックテスト", "📊", "戦略の過去データでの検証と最適化")
     
-    # 注意事項
-    st.info("⚠️ バックテスト機能は開発中です。現在はシミュレーションデータで動作します。")
+    # セッション状態の初期化
+    if 'backtest_result' not in st.session_state:
+        st.session_state.backtest_result = None
+    if 'backtest_running' not in st.session_state:
+        st.session_state.backtest_running = False
     
-    # 設定カラム
-    col1, col2, col3 = st.columns(3)
+    # タブ構成
+    tab1, tab2 = st.tabs(["⚙️ バックテスト設定", "📊 結果表示"])
+    
+    with tab1:
+        backtest_settings_section()
+    
+    with tab2:
+        backtest_results_section()
+
+
+
+
+
+def backtest_results_section():
+    """⑦バックテスト結果層"""
+    st.markdown("#### 📊 バックテスト結果")
+    
+    if st.session_state.backtest_result is None:
+        st.info("👈 左の「バックテスト設定」タブでバックテストを実行してください。")
+        
+        # サンプル結果表示ボタン
+        if st.button("🎭 デモ結果を表示", help="サンプルのバックテスト結果を表示します"):
+            st.session_state.backtest_result = generate_demo_backtest_result(
+                'ma_cross_strategy', 'BTC_JPY', 
+                datetime.now() - timedelta(days=30), 
+                datetime.now() - timedelta(days=1), 
+                1000000
+            )
+            st.rerun()
+        return
+    
+    result = st.session_state.backtest_result
+    summary = result.get('summary', {})
+    
+    # === サマリーメトリクス ===
+    st.markdown("**📈 パフォーマンスサマリー**")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        # 戦略選択
-        strategy_options = {
-            'simple_ma_cross': '単純移動平均クロス',
-            'macd_rsi': 'MACD + RSI戦略',
-            'bollinger_breakout': 'ボリンジャーバンドブレイクアウト',
-            'grid_trading': 'グリッドトレーディング',
-            'multi_timeframe': 'マルチタイムフレーム'
-        }
+        total_return_pct = summary.get('total_return_pct', 0)
+        color = "normal" if total_return_pct >= 0 else "inverse"
+        delta_color = "positive" if total_return_pct >= 0 else "negative"
         
-        selected_strategy = st.selectbox(
-            "戦略",
-            options=list(strategy_options.keys()),
-            format_func=lambda x: strategy_options[x]
-        )
+        st.markdown(create_metric_card(
+            "💰 総収益率",
+            f"{total_return_pct:.2f}%",
+            delta=f"{'+' if total_return_pct >= 0 else ''}{total_return_pct:.2f}%",
+            delta_color=delta_color,
+            icon="📈" if total_return_pct >= 0 else "📉"
+        ), unsafe_allow_html=True)
     
     with col2:
-        # 通貨ペア選択
-        symbol = st.selectbox(
-            "通貨ペア",
-            options=['BTC_JPY', 'ETH_JPY', 'XRP_JPY', 'LTC_JPY'],
-            index=0
-        )
+        final_balance = summary.get('final_balance', 0)
+        initial_capital = summary.get('initial_capital', 1000000)
+        profit = final_balance - initial_capital
+        
+        st.markdown(create_metric_card(
+            "💵 最終資産",
+            format_jpy(final_balance),
+            delta=f"{'+' if profit >= 0 else ''}{format_jpy(profit)}",
+            delta_color="positive" if profit >= 0 else "negative",
+            icon="💎"
+        ), unsafe_allow_html=True)
     
     with col3:
-        # 時間枠選択
-        timeframe = st.selectbox(
-            "時間枠",
-            options=['1hour', '4hour', '1day'],
-            index=0
-        )
+        sharpe_ratio = summary.get('sharpe_ratio', 0)
+        sharpe_color = "positive" if sharpe_ratio > 1.0 else "warning" if sharpe_ratio > 0.5 else "negative"
+        
+        st.markdown(create_metric_card(
+            "📊 シャープレシオ",
+            f"{sharpe_ratio:.2f}",
+            delta="優秀" if sharpe_ratio > 1.0 else "良好" if sharpe_ratio > 0.5 else "要改善",
+            delta_color=sharpe_color,
+            icon="⭐"
+        ), unsafe_allow_html=True)
     
-    # 期間設定
+    with col4:
+        max_dd = summary.get('max_drawdown_pct', 0)
+        dd_color = "positive" if max_dd < 10 else "warning" if max_dd < 20 else "negative"
+        
+        st.markdown(create_metric_card(
+            "📉 最大DD",
+            f"{max_dd:.1f}%",
+            delta="低リスク" if max_dd < 10 else "中リスク" if max_dd < 20 else "高リスク",
+            delta_color=dd_color,
+            icon="🛡️"
+        ), unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # === 詳細メトリクス ===
     col1, col2 = st.columns(2)
     
     with col1:
-        start_date = st.date_input(
-            "開始日",
-            value=datetime.now() - timedelta(days=90),
-            max_value=datetime.now() - timedelta(days=1)
-        )
+        st.markdown("**🎯 取引統計**")
+        
+        trade_metrics = {
+            '総取引数': f"{summary.get('total_trades', 0)}回",
+            '勝率': f"{summary.get('win_rate', 0):.1f}%",
+            '勝ちトレード': f"{summary.get('winning_trades', 0)}回",
+            '負けトレード': f"{summary.get('losing_trades', 0)}回",
+            'プロフィットファクター': f"{summary.get('profit_factor', 0):.2f}",
+            '総手数料': format_jpy(summary.get('total_fees', 0))
+        }
+        
+        for key, value in trade_metrics.items():
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                <span style="color: var(--text-color-secondary);">{key}</span>
+                <span style="color: var(--text-color); font-weight: 600;">{value}</span>
+            </div>
+            """, unsafe_allow_html=True)
     
     with col2:
-        end_date = st.date_input(
-            "終了日",
-            value=datetime.now(),
-            min_value=start_date,
-            max_value=datetime.now()
+        st.markdown("**🆚 Buy & Hold比較**")
+        
+        buy_hold = result.get('buy_hold_comparison', {})
+        strategy_return = summary.get('total_return_pct', 0)
+        buy_hold_return = buy_hold.get('total_return_pct', 0)
+        outperforms = strategy_return > buy_hold_return
+        
+        comparison_metrics = {
+            '戦略リターン': f"{strategy_return:.2f}%",
+            'Buy & Holdリターン': f"{buy_hold_return:.2f}%",
+            'アウトパフォーム': f"{'+' if outperforms else ''}{strategy_return - buy_hold_return:.2f}%",
+            '戦略シャープレシオ': f"{summary.get('sharpe_ratio', 0):.2f}",
+            'Buy & Holdシャープレシオ': f"{buy_hold.get('sharpe_ratio', 0):.2f}",
+            '判定': "🎉 戦略の勝利!" if outperforms else "😞 Buy & Holdの勝利"
+        }
+        
+        for key, value in comparison_metrics.items():
+            color = "var(--success-color)" if key == "判定" and outperforms else "var(--error-color)" if key == "判定" else "var(--text-color)"
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                <span style="color: var(--text-color-secondary);">{key}</span>
+                <span style="color: {color}; font-weight: 600;">{value}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # === 資産曲線グラフ ===
+    display_backtest_charts(result)
+    
+    # === 詳細データ表示 ===
+    with st.expander("📋 詳細データ"):
+        st.json(result, expanded=False)
+
+
+def display_backtest_charts(result: dict):
+    """バックテスト結果のチャートを表示"""
+    st.markdown("**📈 資産推移チャート**")
+    
+    equity_curve = result.get('equity_curve', {})
+    timestamps = equity_curve.get('timestamps', [])
+    equity_values = equity_curve.get('equity', [])
+    
+    if not timestamps or not equity_values:
+        st.warning("📊 資産曲線データがありません")
+        return
+    
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        
+        # 日付を変換
+        dates = pd.to_datetime(timestamps)
+        
+        # Buy & Hold曲線を計算
+        buy_hold_comparison = result.get('buy_hold_comparison', {})
+        buy_hold_return = buy_hold_comparison.get('total_return_pct', 0)
+        initial_value = equity_values[0] if equity_values else 1000000
+        
+        # Buy & Hold曲線（単純な線形増加として近似）
+        buy_hold_values = [initial_value * (1 + (buy_hold_return / 100) * i / len(equity_values)) 
+                          for i in range(len(equity_values))]
+        
+        # グラフ作成
+        fig = go.Figure()
+        
+        # 戦略の資産曲線
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=equity_values,
+            mode='lines',
+            name='戦略',
+            line=dict(color='#00d4aa', width=3),
+            hovertemplate='<b>戦略</b><br>日付: %{x}<br>資産: ¥%{y:,.0f}<extra></extra>'
+        ))
+        
+        # Buy & Hold曲線
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=buy_hold_values,
+            mode='lines',
+            name='Buy & Hold',
+            line=dict(color='#ff6b6b', width=2, dash='dash'),
+            hovertemplate='<b>Buy & Hold</b><br>日付: %{x}<br>資産: ¥%{y:,.0f}<extra></extra>'
+        ))
+        
+        # レイアウト設定
+        fig.update_layout(
+            title="資産推移比較",
+            xaxis_title="日付",
+            yaxis_title="資産額 (円)",
+            template="plotly_dark",
+            hovermode="x unified",
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            height=500
         )
-    
-    # 詳細設定
-    with st.expander("詳細設定"):
-        col1, col2 = st.columns(2)
         
-        with col1:
-            initial_capital = st.number_input(
-                "初期資金 (円)",
-                min_value=100000,
-                value=1000000,
-                step=100000
-            )
-            
-            position_size = st.slider(
-                "ポジションサイズ (%)",
-                min_value=1,
-                max_value=100,
-                value=10
-            )
+        # Y軸フォーマット
+        fig.update_yaxis(tickformat=",.0f")
         
-        with col2:
-            commission = st.number_input(
-                "手数料 (%)",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.09,
-                step=0.01
-            )
-            
-            slippage = st.number_input(
-                "スリッページ (%)",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.01,
-                step=0.01
-            )
-    
-    # 開発中の警告表示
-    st.error("🚧 **バックテスト機能は現在開発中です** 🚧")
-    st.warning("""
-    この機能は実装中のため、現在実行できません：
-    - ✅ UI設計: 完了
-    - 🔄 データエンジン: 開発中  
-    - 🔄 バックテスト計算ロジック: 開発中
-    - 📅 完成予定: 近日中
-    """)
-    
-    # 実行ボタン（無効化）
-    if st.button("🚀 バックテスト実行", type="primary", use_container_width=True, disabled=True):
-        run_backtest_simulation(
-            strategy=selected_strategy,
-            symbol=symbol,
-            timeframe=timeframe,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            position_size=position_size/100,
-            commission=commission/100,
-            slippage=slippage/100
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # ドローダウンチャート
+        st.markdown("**📉 ドローダウン分析**")
+        
+        # ドローダウン計算
+        peak = pd.Series(equity_values).expanding().max()
+        drawdown = (pd.Series(equity_values) - peak) / peak * 100
+        
+        fig_dd = go.Figure()
+        
+        fig_dd.add_trace(go.Scatter(
+            x=dates,
+            y=drawdown,
+            mode='lines',
+            fill='tonegative',
+            name='ドローダウン',
+            line=dict(color='#ff6b6b', width=2),
+            fillcolor='rgba(255, 107, 107, 0.3)',
+            hovertemplate='<b>ドローダウン</b><br>日付: %{x}<br>DD: %{y:.1f}%<extra></extra>'
+        ))
+        
+        fig_dd.update_layout(
+            title="ドローダウン推移",
+            xaxis_title="日付",
+            yaxis_title="ドローダウン (%)",
+            template="plotly_dark",
+            height=300
         )
+        
+        st.plotly_chart(fig_dd, use_container_width=True)
+        
+    except ImportError:
+        st.error("📊 Plotlyが利用できません。グラフ表示にはplotlyのインストールが必要です。")
+    except Exception as e:
+        st.error(f"📊 グラフ表示エラー: {e}")
 
 
-def run_backtest_simulation(strategy, symbol, timeframe, start_date, end_date, 
-                            initial_capital, position_size, commission, slippage):
-    """バックテストのシミュレーション実行"""
-    
-    with st.spinner("バックテストを実行中..."):
-        # プログレスバー
-        progress_bar = st.progress(0)
-        
-        # シミュレーション結果を生成
-        progress_bar.progress(50)
-        
-        # 実際の価格データからバックテストを実行
-        st.error("⚠️ バックテスト機能は現在開発中です。実際の価格データを使用したバックテストエンジンを準備中です。")
-        return {}
-        
-        progress_bar.progress(100)
-        progress_bar.empty()
-        
-        # 結果表示
-        display_backtest_results(
-            {
-                'total_return': total_return,
-                'sharpe_ratio': sharpe_ratio,
-                'max_drawdown': max_drawdown,
-                'win_rate': win_rate,
-                'total_trades': total_trades,
-                'profit_factor': profit_factor
-            },
-            start_date,
-            end_date,
-            initial_capital
-        )
-
-
-def display_backtest_results(results, start_date, end_date, initial_capital):
+def display_backtest_results_legacy(results, start_date, end_date, initial_capital):
     """バックテスト結果を表示"""
     
     st.markdown("### 📊 バックテスト結果")
@@ -3157,6 +3270,574 @@ def trading_limits_section(risk_manager: 'RiskManager'):
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 設定保存に失敗しました: {str(e)}")
+
+
+def backtest_settings_section():
+    """⑥バックテスト設定層"""
+    st.markdown("#### ⚙️ バックテスト設定")
+    
+    # 戦略マネージャーをインポート
+    try:
+        from backend.strategy import get_strategy_manager
+        strategy_manager = get_strategy_manager()
+        available_strategies = strategy_manager.get_available_strategies()
+    except Exception as e:
+        st.error(f"戦略マネージャーの初期化に失敗: {e}")
+        available_strategies = [
+            {'id': 'ma_cross_strategy', 'name': '移動平均クロス戦略', 'parameters': {'short_period': 5, 'long_period': 20}},
+            {'id': 'macd_rsi_strategy', 'name': 'MACD + RSI戦略', 'parameters': {'rsi_period': 14, 'macd_fast': 12}},
+            {'id': 'grid_trading_strategy', 'name': 'グリッドトレーディング', 'parameters': {'grid_size': 0.01, 'grid_levels': 10}}
+        ]
+    
+    # === 基本設定エリア ===
+    st.markdown("**📋 基本設定**")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # 戦略選択
+        strategy_options = {s['id']: s['name'] for s in available_strategies}
+        selected_strategy = st.selectbox(
+            "🎯 戦略",
+            options=list(strategy_options.keys()),
+            format_func=lambda x: strategy_options.get(x, x),
+            help="バックテストする取引戦略を選択してください"
+        )
+    
+    with col2:
+        # 通貨ペア選択
+        symbol = st.selectbox(
+            "💱 通貨ペア",
+            options=['BTC_JPY', 'ETH_JPY', 'XRP_JPY', 'LTC_JPY', 'BCH_JPY'],
+            index=0,
+            help="バックテスト対象の通貨ペアを選択してください"
+        )
+    
+    with col3:
+        # 時間枠選択
+        timeframe = st.selectbox(
+            "⏰ 時間枠",
+            options=['1min', '5min', '15min', '1hour', '4hour', '1day'],
+            index=3,  # デフォルト: 1hour
+            help="分析する価格データの時間間隔を選択してください"
+        )
+    
+    st.markdown("---")
+    
+    # === 期間設定エリア ===
+    st.markdown("**📅 期間設定**")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        start_date = st.date_input(
+            "📊 開始日",
+            value=datetime.now() - timedelta(days=30),
+            max_value=datetime.now() - timedelta(days=1),
+            help="バックテストの開始日を選択してください"
+        )
+    
+    with col2:
+        end_date = st.date_input(
+            "🏁 終了日",
+            value=datetime.now() - timedelta(days=1),
+            min_value=start_date,
+            max_value=datetime.now(),
+            help="バックテストの終了日を選択してください"
+        )
+    
+    with col3:
+        # 期間情報表示
+        period_days = (end_date - start_date).days
+        st.metric(
+            "📈 期間",
+            f"{period_days}日間",
+            f"{period_days * 24 if timeframe == '1hour' else period_days}データポイント予想"
+        )
+    
+    st.markdown("---")
+    
+    # === 詳細設定エリア ===
+    with st.expander("⚙️ 詳細設定", expanded=True):
+        
+        # 資金設定
+        st.markdown("**💰 資金設定**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            initial_capital = st.number_input(
+                "初期資金 (円)",
+                min_value=100000,
+                value=1000000,
+                step=100000,
+                help="バックテスト開始時の資金額を設定してください"
+            )
+        
+        with col2:
+            position_size_pct = st.slider(
+                "ポジションサイズ (%)",
+                min_value=1,
+                max_value=100,
+                value=10,
+                help="1回の取引で使用する資金の割合を設定してください"
+            )
+        
+        st.markdown("**💸 コスト設定**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            commission = st.number_input(
+                "手数料 (%)",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.09,
+                step=0.01,
+                format="%.3f",
+                help="取引手数料率を設定してください（GMOコイン: 0.09%）"
+            )
+        
+        with col2:
+            slippage = st.number_input(
+                "スリッページ (%)",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.01,
+                step=0.01,
+                format="%.3f",
+                help="価格スリッページを設定してください"
+            )
+    
+    # === 戦略パラメータ設定 ===
+    selected_strategy_info = next((s for s in available_strategies if s['id'] == selected_strategy), None)
+    strategy_params = {}
+    
+    if selected_strategy_info and selected_strategy_info.get('parameters'):
+        st.markdown("---")
+        st.markdown("**🎛️ 戦略パラメータ**")
+        
+        # パラメータを2列で表示
+        param_items = list(selected_strategy_info['parameters'].items())
+        cols = st.columns(min(2, len(param_items)))
+        
+        for i, (param_name, default_value) in enumerate(param_items):
+            with cols[i % 2]:
+                param_display_name = param_name.replace('_', ' ').title()
+                
+                if isinstance(default_value, int):
+                    strategy_params[param_name] = st.number_input(
+                        param_display_name,
+                        value=default_value,
+                        step=1,
+                        help=f"戦略パラメータ: {param_name}"
+                    )
+                elif isinstance(default_value, float):
+                    strategy_params[param_name] = st.number_input(
+                        param_display_name,
+                        value=default_value,
+                        step=0.01,
+                        format="%.4f",
+                        help=f"戦略パラメータ: {param_name}"
+                    )
+                elif isinstance(default_value, bool):
+                    strategy_params[param_name] = st.checkbox(
+                        param_display_name,
+                        value=default_value,
+                        help=f"戦略パラメータ: {param_name}"
+                    )
+                else:
+                    strategy_params[param_name] = st.text_input(
+                        param_display_name,
+                        value=str(default_value),
+                        help=f"戦略パラメータ: {param_name}"
+                    )
+    
+    st.markdown("---")
+    
+    # === 実行ボタンエリア ===
+    col1, col2, col3 = st.columns([2, 1, 2])
+    
+    with col2:
+        if st.button(
+            "🚀 バックテスト実行",
+            type="primary",
+            use_container_width=True,
+            disabled=st.session_state.backtest_running
+        ):
+            # バックテスト実行
+            run_backtest(
+                strategy_id=selected_strategy,
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                position_size_pct=position_size_pct,
+                commission=commission,
+                slippage=slippage,
+                strategy_params=strategy_params
+            )
+    
+    # 実行中の表示
+    if st.session_state.backtest_running:
+        st.info("⏳ バックテストを実行中です...")
+        st.progress(0.5)
+
+
+def run_backtest(strategy_id: str, symbol: str, timeframe: str, start_date, end_date,
+                initial_capital: float, position_size_pct: int, commission: float,
+                slippage: float, strategy_params: dict):
+    """バックテストを実行"""
+    
+    st.session_state.backtest_running = True
+    
+    try:
+        with st.spinner("🔄 バックテストを実行中..."):
+            # バックエンドモジュールをインポート
+            from backend.backtester import Backtester
+            from backend.config_manager import get_config_manager
+            
+            # 設定を一時的に更新
+            config = get_config_manager()
+            config.set('backtest.initial_capital', initial_capital)
+            config.set('backtest.commission.taker_fee', commission / 100)
+            config.set('backtest.slippage.market', slippage / 100)
+            
+            # バックテスターを作成
+            backtester = Backtester()
+            
+            # バックテストを実行
+            result = backtester.run_backtest(
+                strategy_id=strategy_id,
+                start_date=datetime.combine(start_date, datetime.min.time()),
+                end_date=datetime.combine(end_date, datetime.max.time()),
+                symbol=symbol,
+                interval=timeframe,
+                parameters=strategy_params
+            )
+            
+            if result:
+                st.session_state.backtest_result = result
+                st.success("✅ バックテストが完了しました！")
+                st.info("💡 「結果表示」タブで詳細な結果を確認できます。")
+            else:
+                st.error("❌ バックテストの実行に失敗しました")
+                
+    except ImportError as e:
+        st.error(f"❌ バックエンドモジュールのインポートに失敗: {e}")
+        st.info("💡 デモモードでバックテスト結果を生成します...")
+        # デモ結果を生成
+        st.session_state.backtest_result = generate_demo_backtest_result(
+            strategy_id, symbol, start_date, end_date, initial_capital
+        )
+        st.success("✅ デモバックテストが完了しました！")
+        
+    except Exception as e:
+        st.error(f"❌ バックテスト実行エラー: {e}")
+        
+    finally:
+        st.session_state.backtest_running = False
+
+
+def generate_demo_backtest_result(strategy_id: str, symbol: str, start_date, end_date, initial_capital: float) -> dict:
+    """デモ用のバックテスト結果を生成"""
+    import numpy as np
+    
+    # 基本設定
+    days = (end_date - start_date).days
+    total_return = np.random.uniform(-20, 50)  # -20%から+50%
+    win_rate = np.random.uniform(45, 75)  # 45%から75%
+    total_trades = np.random.randint(20, 100)
+    
+    # 計算値
+    final_balance = initial_capital * (1 + total_return / 100)
+    max_drawdown = np.random.uniform(5, 30)
+    sharpe_ratio = np.random.uniform(0.5, 2.5)
+    profit_factor = np.random.uniform(1.1, 2.8)
+    
+    # 資産曲線生成
+    dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    returns = np.random.normal(total_return / days / 100, 0.02, len(dates))
+    equity_values = [initial_capital]
+    
+    for daily_return in returns[1:]:
+        equity_values.append(equity_values[-1] * (1 + daily_return))
+    
+    return {
+        'strategy_id': strategy_id,
+        'symbol': symbol,
+        'start_date': start_date.strftime('%Y-%m-%d'),
+        'end_date': end_date.strftime('%Y-%m-%d'),
+        'summary': {
+            'initial_capital': initial_capital,
+            'final_balance': final_balance,
+            'total_return': final_balance - initial_capital,
+            'total_return_pct': total_return,
+            'max_drawdown_pct': max_drawdown,
+            'sharpe_ratio': sharpe_ratio,
+            'profit_factor': profit_factor,
+            'win_rate': win_rate,
+            'total_trades': total_trades,
+            'winning_trades': int(total_trades * win_rate / 100),
+            'losing_trades': int(total_trades * (100 - win_rate) / 100),
+            'total_fees': final_balance * 0.001  # 手数料概算
+        },
+        'equity_curve': {
+            'timestamps': [d.strftime('%Y-%m-%d') for d in dates],
+            'equity': equity_values[:len(dates)],
+            'balance': equity_values[:len(dates)]
+        },
+        'trades': [],  # 簡略化のため空
+        'buy_hold_comparison': {
+            'total_return_pct': np.random.uniform(10, 40),
+            'sharpe_ratio': np.random.uniform(0.8, 1.5),
+            'max_drawdown_pct': np.random.uniform(15, 35)
+        }
+    }
+
+
+def backtest_results_section():
+    """⑦バックテスト結果層"""
+    st.markdown("#### 📊 バックテスト結果")
+    
+    if st.session_state.backtest_result is None:
+        st.info("👈 左の「バックテスト設定」タブでバックテストを実行してください。")
+        
+        # サンプル結果表示ボタン
+        if st.button("🎭 デモ結果を表示", help="サンプルのバックテスト結果を表示します"):
+            st.session_state.backtest_result = generate_demo_backtest_result(
+                'ma_cross_strategy', 'BTC_JPY', 
+                datetime.now() - timedelta(days=30), 
+                datetime.now() - timedelta(days=1), 
+                1000000
+            )
+            st.rerun()
+        return
+    
+    result = st.session_state.backtest_result
+    summary = result.get('summary', {})
+    
+    # === サマリーメトリクス ===
+    st.markdown("**📈 パフォーマンスサマリー**")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        total_return_pct = summary.get('total_return_pct', 0)
+        color = "normal" if total_return_pct >= 0 else "inverse"
+        delta_color = "positive" if total_return_pct >= 0 else "negative"
+        
+        st.markdown(create_metric_card(
+            "💰 総収益率",
+            f"{total_return_pct:.2f}%",
+            delta=f"{'+' if total_return_pct >= 0 else ''}{total_return_pct:.2f}%",
+            delta_color=delta_color,
+            icon="📈" if total_return_pct >= 0 else "📉"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        final_balance = summary.get('final_balance', 0)
+        initial_capital = summary.get('initial_capital', 1000000)
+        profit = final_balance - initial_capital
+        
+        st.markdown(create_metric_card(
+            "💵 最終資産",
+            format_jpy(final_balance),
+            delta=f"{'+' if profit >= 0 else ''}{format_jpy(profit)}",
+            delta_color="positive" if profit >= 0 else "negative",
+            icon="💎"
+        ), unsafe_allow_html=True)
+    
+    with col3:
+        sharpe_ratio = summary.get('sharpe_ratio', 0)
+        sharpe_color = "positive" if sharpe_ratio > 1.0 else "warning" if sharpe_ratio > 0.5 else "negative"
+        
+        st.markdown(create_metric_card(
+            "📊 シャープレシオ",
+            f"{sharpe_ratio:.2f}",
+            delta="優秀" if sharpe_ratio > 1.0 else "良好" if sharpe_ratio > 0.5 else "要改善",
+            delta_color=sharpe_color,
+            icon="⭐"
+        ), unsafe_allow_html=True)
+    
+    with col4:
+        max_dd = summary.get('max_drawdown_pct', 0)
+        dd_color = "positive" if max_dd < 10 else "warning" if max_dd < 20 else "negative"
+        
+        st.markdown(create_metric_card(
+            "📉 最大DD",
+            f"{max_dd:.1f}%",
+            delta="低リスク" if max_dd < 10 else "中リスク" if max_dd < 20 else "高リスク",
+            delta_color=dd_color,
+            icon="🛡️"
+        ), unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # === 詳細メトリクス ===
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**🎯 取引統計**")
+        
+        trade_metrics = {
+            '総取引数': f"{summary.get('total_trades', 0)}回",
+            '勝率': f"{summary.get('win_rate', 0):.1f}%",
+            '勝ちトレード': f"{summary.get('winning_trades', 0)}回",
+            '負けトレード': f"{summary.get('losing_trades', 0)}回",
+            'プロフィットファクター': f"{summary.get('profit_factor', 0):.2f}",
+            '総手数料': format_jpy(summary.get('total_fees', 0))
+        }
+        
+        for key, value in trade_metrics.items():
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                <span style="color: var(--text-color-secondary);">{key}</span>
+                <span style="color: var(--text-color); font-weight: 600;">{value}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("**🆚 Buy & Hold比較**")
+        
+        buy_hold = result.get('buy_hold_comparison', {})
+        strategy_return = summary.get('total_return_pct', 0)
+        buy_hold_return = buy_hold.get('total_return_pct', 0)
+        outperforms = strategy_return > buy_hold_return
+        
+        comparison_metrics = {
+            '戦略リターン': f"{strategy_return:.2f}%",
+            'Buy & Holdリターン': f"{buy_hold_return:.2f}%",
+            'アウトパフォーム': f"{'+' if outperforms else ''}{strategy_return - buy_hold_return:.2f}%",
+            '戦略シャープレシオ': f"{summary.get('sharpe_ratio', 0):.2f}",
+            'Buy & Holdシャープレシオ': f"{buy_hold.get('sharpe_ratio', 0):.2f}",
+            '判定': "🎉 戦略の勝利!" if outperforms else "😞 Buy & Holdの勝利"
+        }
+        
+        for key, value in comparison_metrics.items():
+            color = "var(--success-color)" if key == "判定" and outperforms else "var(--error-color)" if key == "判定" else "var(--text-color)"
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                <span style="color: var(--text-color-secondary);">{key}</span>
+                <span style="color: {color}; font-weight: 600;">{value}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # === 資産曲線グラフ ===
+    display_backtest_charts(result)
+    
+    # === 詳細データ表示 ===
+    with st.expander("📋 詳細データ"):
+        st.json(result, expanded=False)
+
+
+def display_backtest_charts(result: dict):
+    """バックテスト結果のチャートを表示"""
+    st.markdown("**📈 資産推移チャート**")
+    
+    equity_curve = result.get('equity_curve', {})
+    timestamps = equity_curve.get('timestamps', [])
+    equity_values = equity_curve.get('equity', [])
+    
+    if not timestamps or not equity_values:
+        st.warning("📊 資産曲線データがありません")
+        return
+    
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        
+        # 日付を変換
+        dates = pd.to_datetime(timestamps)
+        
+        # Buy & Hold曲線を計算
+        buy_hold_comparison = result.get('buy_hold_comparison', {})
+        buy_hold_return = buy_hold_comparison.get('total_return_pct', 0)
+        initial_value = equity_values[0] if equity_values else 1000000
+        
+        # Buy & Hold曲線（単純な線形増加として近似）
+        buy_hold_values = [initial_value * (1 + (buy_hold_return / 100) * i / len(equity_values)) 
+                          for i in range(len(equity_values))]
+        
+        # グラフ作成
+        fig = go.Figure()
+        
+        # 戦略の資産曲線
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=equity_values,
+            mode='lines',
+            name='戦略',
+            line=dict(color='#00d4aa', width=3),
+            hovertemplate='<b>戦略</b><br>日付: %{x}<br>資産: ¥%{y:,.0f}<extra></extra>'
+        ))
+        
+        # Buy & Hold曲線
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=buy_hold_values,
+            mode='lines',
+            name='Buy & Hold',
+            line=dict(color='#ff6b6b', width=2, dash='dash'),
+            hovertemplate='<b>Buy & Hold</b><br>日付: %{x}<br>資産: ¥%{y:,.0f}<extra></extra>'
+        ))
+        
+        # レイアウト設定
+        fig.update_layout(
+            title="資産推移比較",
+            xaxis_title="日付",
+            yaxis_title="資産額 (円)",
+            template="plotly_dark",
+            hovermode="x unified",
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            height=500
+        )
+        
+        # Y軸フォーマット
+        fig.update_yaxis(tickformat=",.0f")
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # ドローダウンチャート
+        st.markdown("**📉 ドローダウン分析**")
+        
+        # ドローダウン計算
+        peak = pd.Series(equity_values).expanding().max()
+        drawdown = (pd.Series(equity_values) - peak) / peak * 100
+        
+        fig_dd = go.Figure()
+        
+        fig_dd.add_trace(go.Scatter(
+            x=dates,
+            y=drawdown,
+            mode='lines',
+            fill='tonegative',
+            name='ドローダウン',
+            line=dict(color='#ff6b6b', width=2),
+            fillcolor='rgba(255, 107, 107, 0.3)',
+            hovertemplate='<b>ドローダウン</b><br>日付: %{x}<br>DD: %{y:.1f}%<extra></extra>'
+        ))
+        
+        fig_dd.update_layout(
+            title="ドローダウン推移",
+            xaxis_title="日付",
+            yaxis_title="ドローダウン (%)",
+            template="plotly_dark",
+            height=300
+        )
+        
+        st.plotly_chart(fig_dd, use_container_width=True)
+        
+    except ImportError:
+        st.error("📊 Plotlyが利用できません。グラフ表示にはplotlyのインストールが必要です。")
+    except Exception as e:
+        st.error(f"📊 グラフ表示エラー: {e}")
 
 
 if __name__ == "__main__":

@@ -171,39 +171,46 @@ class GMOCoinRESTFetcher(BaseDataFetcher):
         
         params = {
             'symbol': symbol,
-            'interval': interval_map[interval],
-            'date': datetime.now(timezone.utc).strftime('%Y%m%d')
+            'interval': interval_map[interval]
         }
         
         try:
-            # データを取得
+            # GMOコインのklines エンドポイントを使用
             data = await self._request('GET', '/v1/klines', params)
             
             if not data:
                 self.logger.warning(f"OHLCVデータが取得できませんでした: {symbol} {interval}")
                 return pd.DataFrame()
             
-            # DataFrameに変換
-            df = pd.DataFrame(data, columns=['openTime', 'open', 'high', 'low', 'close', 'volume'])
+            # GMOコインのレスポンス形式: [[openTime, open, high, low, close, volume], ...]
+            # カラム名を手動で付与
+            COLS = ["open_time", "open", "high", "low", "close", "volume"]
+            df = pd.DataFrame(data, columns=COLS)
             
-            # データ型を変換
-            df['timestamp'] = pd.to_datetime(df['openTime'].astype(int), unit='ms')
-            df['open'] = df['open'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
-            df['close'] = df['close'].astype(float)
-            df['volume'] = df['volume'].astype(float)
+            if df.empty:
+                self.logger.warning(f"OHLCVデータが空でした: {symbol} {interval}")
+                return pd.DataFrame()
             
-            # 不要な列を削除
-            df = df.drop(columns=['openTime'])
+            # timestampカラムを作成（ISO 8601形式の文字列をUTCで変換）
+            df['timestamp'] = pd.to_datetime(df['open_time'], utc=True)
             
-            # タイムスタンプでソート
-            df = df.sort_values('timestamp')
+            # 数値カラムをfloat型に変換
+            df[['open', 'high', 'low', 'close', 'volume']] = \
+                df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+            
+            # timestampをインデックスに設定してソート
+            df = df.set_index('timestamp').sort_index()
+            
+            # open_timeカラムは不要なので削除
+            df = df.drop(columns=['open_time'])
             
             # データを検証
-            if self.validator.validate_ohlcv(df):
-                # データを保存
-                self.storage.save_ohlcv(symbol, interval, df)
+            # 検証用にtimestampをカラムとして復元
+            df_for_validation = df.reset_index()
+            
+            if self.validator.validate_ohlcv(df_for_validation):
+                # データを保存（indexをリセットしてからsave）
+                self.storage.save_ohlcv(symbol, interval, df_for_validation)
                 return df.tail(limit)
             else:
                 self.logger.error("OHLCVデータの検証に失敗しました")
