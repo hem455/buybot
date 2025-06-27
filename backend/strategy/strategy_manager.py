@@ -97,9 +97,9 @@ class StrategyManager:
         self.config = get_config_manager()
         self.logger = get_logger()
         
-        # 利用可能な戦略を登録
+        # 利用可能な戦略を登録（UIと一致させる）
         self.available_strategies: Dict[str, Type[BaseStrategy]] = {
-            'simple_ma_cross': SimpleMovingAverageCrossStrategy,
+            'ma_cross': SimpleMovingAverageCrossStrategy,
             'macd_rsi': MACDRSIStrategy,
             'grid_trading': GridTradingStrategy,
             'ml_based': MLBasedStrategy,

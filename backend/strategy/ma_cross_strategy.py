@@ -15,7 +15,7 @@ class SimpleMovingAverageCrossStrategy(BaseStrategy):
     
     def __init__(self, params: Optional[Dict[str, Any]] = None):
         """初期化"""
-        super().__init__('simple_ma_cross', params)
+        super().__init__('ma_cross', params)
         
         # パラメータを取得
         self.short_period = self.params.get('short_period', 7)

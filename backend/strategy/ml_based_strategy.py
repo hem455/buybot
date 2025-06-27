@@ -88,7 +88,8 @@ class MLBasedStrategy(BaseStrategy):
         if 'macd' in df.columns:
             features['macd'] = df['macd']
             features['macd_signal'] = df['macd_signal']
-            features['macd_hist'] = df['macd_hist']
+            if 'macd_hist' in df.columns:
+                features['macd_hist'] = df['macd_hist']
         
         # ボリンジャーバンド位置
         if 'bb_upper' in df.columns and 'bb_lower' in df.columns:

@@ -82,11 +82,11 @@ indicators:
 # 戦略設定
 strategies:
   # デフォルト戦略
-  default: "simple_ma_cross"
+  default: "ma_cross"
   
   # 利用可能な戦略
   available:
-    simple_ma_cross:
+    ma_cross:
       name: "単純移動平均クロス"
       description: "短期MAと長期MAのクロスでエントリー"
       parameters:

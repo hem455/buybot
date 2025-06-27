@@ -179,7 +179,7 @@ class ConfigManager:
             戦略設定
         """
         if strategy_id is None:
-            strategy_id = self.get('strategies.default', 'simple_ma_cross')
+            strategy_id = self.get('strategies.default', 'ma_cross')
         
         strategies = self.get('strategies.available', {})
         if strategy_id not in strategies:
